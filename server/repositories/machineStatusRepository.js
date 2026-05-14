@@ -2,6 +2,22 @@ import { getPool, isDatabaseConfigured } from "../db/index.js";
 const SCHEDULER_LOCK_FAMILY = 8241;
 const SCHEDULER_LOCK_RESOURCE = 1;
 
+function deduplicateMachineRows(data) {
+  const deduplicated = new Map();
+
+  for (const row of Array.isArray(data) ? data : []) {
+    if (!row?.machineId) {
+      continue;
+    }
+
+    // Keep the most recent row in the payload for each machine key so the bulk
+    // upsert cannot hit the same primary key twice in one statement.
+    deduplicated.set(row.machineId, row);
+  }
+
+  return Array.from(deduplicated.values());
+}
+
 export async function saveMachineStatusSnapshot({ fetchedAt, source, data }) {
   if (!isDatabaseConfigured()) {
     return { persisted: false, reason: "database_not_configured" };
@@ -9,6 +25,7 @@ export async function saveMachineStatusSnapshot({ fetchedAt, source, data }) {
 
   const db = getPool();
   const client = await db.connect();
+  const normalizedData = deduplicateMachineRows(data);
 
   try {
     await client.query("begin");
@@ -21,10 +38,10 @@ export async function saveMachineStatusSnapshot({ fetchedAt, source, data }) {
       [
         "shopfloor-current-status",
         fetchedAt,
-        Array.isArray(data) ? data.length : 0,
+        normalizedData.length,
         JSON.stringify({
           source,
-          data
+          data: normalizedData
         })
       ]
     );
@@ -94,28 +111,26 @@ export async function saveMachineStatusSnapshot({ fetchedAt, source, data }) {
       `,
       [
         JSON.stringify(
-          Array.isArray(data)
-            ? data.map((row) => ({
-                machine_id: row.machineId,
-                kco: row.kco ?? null,
-                plant_code: row.plantCode ?? null,
-                job_code: row.jobCode ?? null,
-                operation_code: row.operationCode ?? null,
-                event_type: row.eventType ?? null,
-                status_code: row.statusCode ?? null,
-                status_description: row.statusDescription ?? null,
-                event_start_time: row.eventStartTime ?? null,
-                event_seq_code: row.eventSeqCode ?? null,
-                last_fetched_at: fetchedAt,
-                raw_payload: row
-              }))
-            : []
+          normalizedData.map((row) => ({
+            machine_id: row.machineId,
+            kco: row.kco ?? null,
+            plant_code: row.plantCode ?? null,
+            job_code: row.jobCode ?? null,
+            operation_code: row.operationCode ?? null,
+            event_type: row.eventType ?? null,
+            status_code: row.statusCode ?? null,
+            status_description: row.statusDescription ?? null,
+            event_start_time: row.eventStartTime ?? null,
+            event_seq_code: row.eventSeqCode ?? null,
+            last_fetched_at: fetchedAt,
+            raw_payload: row
+          }))
         )
       ]
     );
 
     await client.query("commit");
-    return { persisted: true, count: Array.isArray(data) ? data.length : 0 };
+    return { persisted: true, count: normalizedData.length };
   } catch (error) {
     await client.query("rollback");
     throw error;
