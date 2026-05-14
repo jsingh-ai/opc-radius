@@ -1,10 +1,13 @@
 import { apiGet, apiPost } from "./api/client";
 
 function normalizeMachine(record) {
+  const machineId = cleanString(record.machineId) || "Unknown";
+
   return {
     kco: record.kco ?? "--",
     plantCode: record.plantCode ?? "--",
-    machineId: record.machineId ?? "Unknown",
+    machineId,
+    displayName: buildMachineDisplayName(machineId),
     jobCode: cleanString(record.jobCode),
     operationCode: cleanString(record.operationCode),
     eventType: cleanString(record.eventType),
@@ -21,6 +24,20 @@ function cleanString(value) {
   }
 
   return String(value).trim();
+}
+
+function buildMachineDisplayName(machineId) {
+  const digits = String(machineId).replace(/\D/g, "");
+
+  if (digits.length >= 3) {
+    const pressNumber = Number(digits.slice(-2));
+
+    if (!Number.isNaN(pressNumber) && pressNumber > 0) {
+      return `Press ${pressNumber}`;
+    }
+  }
+
+  return `Press ${machineId}`;
 }
 
 export async function fetchMachineStatuses() {

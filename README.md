@@ -20,7 +20,7 @@ React + Vite frontend with an Express API layer for secure machine-status pollin
 
 - The server creates its tables automatically on startup when `DATABASE_URL` is set
 - SQL is also available at `server/scripts/init.sql`
-- Each API fetch stores a full response snapshot plus an upserted current row per machine
+- Each API fetch stores a full response snapshot, a structured per-machine history row set, and an upserted current row per machine
 - The server scheduler polls the upstream machine-status API every `SHOPFLOOR_POLLING_INTERVAL_SECONDS`
 - The dashboard reads the latest persisted DB state instead of directly driving upstream polling
 - The dashboard refresh control only changes how often each browser rereads the saved DB-backed data

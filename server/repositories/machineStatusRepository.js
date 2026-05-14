@@ -48,6 +48,70 @@ export async function saveMachineStatusSnapshot({ fetchedAt, source, data }) {
 
     await client.query(
       `
+        insert into machine_status_history (
+          fetched_at,
+          machine_id,
+          kco,
+          plant_code,
+          job_code,
+          operation_code,
+          event_type,
+          status_code,
+          status_description,
+          event_start_time,
+          event_seq_code,
+          raw_payload
+        )
+        select
+          fetched_at,
+          machine_id,
+          kco,
+          plant_code,
+          job_code,
+          operation_code,
+          event_type,
+          status_code,
+          status_description,
+          event_start_time,
+          event_seq_code,
+          raw_payload
+        from jsonb_to_recordset($1::jsonb) as x(
+          fetched_at timestamptz,
+          machine_id text,
+          kco integer,
+          plant_code text,
+          job_code text,
+          operation_code text,
+          event_type text,
+          status_code text,
+          status_description text,
+          event_start_time timestamptz,
+          event_seq_code text,
+          raw_payload jsonb
+        )
+      `,
+      [
+        JSON.stringify(
+          normalizedData.map((row) => ({
+            fetched_at: fetchedAt,
+            machine_id: row.machineId,
+            kco: row.kco ?? null,
+            plant_code: row.plantCode ?? null,
+            job_code: row.jobCode ?? null,
+            operation_code: row.operationCode ?? null,
+            event_type: row.eventType ?? null,
+            status_code: row.statusCode ?? null,
+            status_description: row.statusDescription ?? null,
+            event_start_time: row.eventStartTime ?? null,
+            event_seq_code: row.eventSeqCode ?? null,
+            raw_payload: row
+          }))
+        )
+      ]
+    );
+
+    await client.query(
+      `
         with incoming as (
           select *
           from jsonb_to_recordset($1::jsonb) as x(

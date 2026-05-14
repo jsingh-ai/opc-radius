@@ -2,7 +2,7 @@ export function StatusSummaryBar({ summary, machineCount, isLoading }) {
   return (
     <section className="summary-grid">
       <article className="panel summary-card accent-blue">
-        <p className="label">Machines visible</p>
+        <p className="label">Total machines</p>
         <h3>{isLoading && machineCount === 0 ? "--" : machineCount}</h3>
       </article>
 
@@ -12,13 +12,13 @@ export function StatusSummaryBar({ summary, machineCount, isLoading }) {
       </article>
 
       <article className="panel summary-card accent-amber">
-        <p className="label">Attention needed</p>
-        <h3>{summary.attention}</h3>
+        <p className="label">Make ready</p>
+        <h3>{summary.makeReady}</h3>
       </article>
 
       <article className="panel summary-card accent-slate">
-        <p className="label">Unique statuses</p>
-        <h3>{summary.uniqueStatuses}</h3>
+        <p className="label">Attention needed</p>
+        <h3>{summary.attention}</h3>
       </article>
     </section>
   );

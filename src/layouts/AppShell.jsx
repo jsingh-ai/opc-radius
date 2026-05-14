@@ -1,16 +1,16 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { ThemeToggle } from "../components/app/ThemeToggle";
+import { usePageHeader } from "../context/PageHeaderContext";
 import { usePagePresence } from "../hooks/usePagePresence";
 
 const navItems = [
   { to: "/", label: "Dashboard" },
-  { to: "/analytics", label: "Analytics" },
-  { to: "/operations", label: "Operations" },
   { to: "/admin", label: "Admin" }
 ];
 
 export function AppShell() {
   const appTitle = import.meta.env.VITE_APP_TITLE || "Press Radius OPC Dashboard";
+  const { headerState } = usePageHeader();
   usePagePresence();
 
   return (
@@ -39,16 +39,26 @@ export function AppShell() {
             </NavLink>
           ))}
         </nav>
+
+        <div className="sidebar-footer">
+          <ThemeToggle />
+        </div>
       </aside>
 
       <div className="main-panel">
         <header className="topbar">
           <div className="topbar-content">
             <div>
-              <p className="eyebrow">Production Overview</p>
-              <h2>Machine Status Command Center</h2>
+              <p className="eyebrow">{headerState.eyebrow}</p>
+              <h2>{headerState.title}</h2>
             </div>
-            <ThemeToggle />
+
+            {headerState.detailValue ? (
+              <div className="topbar-detail">
+                <p className="label">{headerState.detailLabel}</p>
+                <p className="value-emphasis">{headerState.detailValue}</p>
+              </div>
+            ) : null}
           </div>
         </header>
 

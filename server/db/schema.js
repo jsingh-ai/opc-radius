@@ -24,11 +24,37 @@ export const schemaSql = `
     raw_payload jsonb not null
   );
 
+  create table if not exists machine_status_history (
+    id bigserial primary key,
+    fetched_at timestamptz not null,
+    machine_id text not null,
+    kco integer,
+    plant_code text,
+    job_code text,
+    operation_code text,
+    event_type text,
+    status_code text,
+    status_description text,
+    event_start_time timestamptz,
+    event_seq_code text,
+    raw_payload jsonb not null,
+    created_at timestamptz not null default now()
+  );
+
   create index if not exists idx_machine_status_fetches_fetched_at
     on machine_status_fetches (fetched_at desc);
 
   create index if not exists idx_machine_status_current_status_description
     on machine_status_current (status_description);
+
+  create index if not exists idx_machine_status_history_machine_fetched
+    on machine_status_history (machine_id, fetched_at desc);
+
+  create index if not exists idx_machine_status_history_fetched_at
+    on machine_status_history (fetched_at desc);
+
+  create index if not exists idx_machine_status_history_status_description
+    on machine_status_history (status_description);
 
   create table if not exists dashboard_view_sessions (
     session_id text primary key,

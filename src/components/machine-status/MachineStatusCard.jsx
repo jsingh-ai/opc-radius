@@ -17,7 +17,8 @@ export function MachineStatusCard({ machine }) {
       <div className="machine-card-header">
         <div>
           <p className="label">Machine</p>
-          <h3>{machine.machineId}</h3>
+          <h3>{machine.displayName || machine.machineId}</h3>
+          <p className="machine-subtitle">Machine ID {machine.machineId}</p>
         </div>
         <span className="status-chip">{machine.eventType || "--"}</span>
       </div>
@@ -30,10 +31,7 @@ export function MachineStatusCard({ machine }) {
       <div className="machine-details">
         <DetailRow label="Job" value={machine.jobCode} />
         <DetailRow label="Operation" value={machine.operationCode} />
-        <DetailRow label="KCO" value={machine.kco} />
         <DetailRow label="Plant" value={machine.plantCode} />
-        <DetailRow label="Event Start" value={machine.eventStartTime} />
-        <DetailRow label="Seq Code" value={machine.eventSeqCode} />
       </div>
     </article>
   );
