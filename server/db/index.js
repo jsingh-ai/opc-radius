@@ -30,7 +30,10 @@ export function getPool() {
   if (!pool) {
     pool = new Pool({
       connectionString: config.postgres.url,
-      ssl: createSslConfig()
+      ssl: createSslConfig(),
+      max: config.postgres.poolMax,
+      idleTimeoutMillis: config.postgres.idleTimeoutMs,
+      connectionTimeoutMillis: config.postgres.connectionTimeoutMs
     });
   }
 
@@ -47,4 +50,11 @@ export async function initializeDatabase() {
 
   await db.query(schemaSql);
   return true;
+}
+
+export async function closeDatabase() {
+  if (pool) {
+    await pool.end();
+    pool = null;
+  }
 }

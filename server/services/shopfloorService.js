@@ -1,4 +1,6 @@
 import { config } from "../config.js";
+import { AppError } from "../lib/http.js";
+import { validateAndNormalizeMachinePayload } from "../models/machineStatusModel.js";
 
 function buildStatusUrl() {
   const url = new URL("/api/v1/shopfloor/current-status", config.shopfloor.baseUrl);
@@ -13,28 +15,46 @@ function buildStatusUrl() {
 }
 
 export async function fetchCurrentMachineStatus() {
-  if (!config.shopfloor.apiKey) {
-    throw new Error("SHOPFLOOR_API_KEY is not configured on the server.");
+  let response;
+
+  try {
+    response = await fetch(buildStatusUrl(), {
+      headers: {
+        accept: "application/json",
+        "X-API-Key": config.shopfloor.apiKey,
+        "User-Agent": "press-radius-opc-dashboard/1.0"
+      },
+      signal: AbortSignal.timeout(config.shopfloor.upstreamTimeoutMs)
+    });
+  } catch (error) {
+    if (error?.name === "TimeoutError") {
+      throw new AppError(504, "Upstream machine status service timed out.");
+    }
+
+    throw new AppError(502, "Unable to connect to the upstream machine status service.");
   }
 
-  const response = await fetch(buildStatusUrl(), {
-    headers: {
-      accept: "application/json",
-      "X-API-Key": config.shopfloor.apiKey
-    }
-  });
-
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
+  let payload = null;
+
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    throw new AppError(502, "Upstream service returned invalid JSON.");
+  }
 
   if (!response.ok) {
-    const error = new Error("Failed to fetch machine status from upstream API.");
-    error.status = response.status;
-    error.payload = payload;
-    throw error;
+    throw new AppError(502, "Upstream machine status service is unavailable.");
   }
 
   const fetchedAt = new Date().toISOString();
+  let data;
+
+  try {
+    data = validateAndNormalizeMachinePayload(payload);
+  } catch {
+    throw new AppError(502, "Upstream machine status payload failed validation.");
+  }
 
   return {
     fetchedAt,
@@ -44,6 +64,6 @@ export async function fetchCurrentMachineStatus() {
       machPrefix: config.shopfloor.machPrefix,
       includeEventDetails: config.shopfloor.includeEventDetails
     },
-    data: payload
+    data
   };
 }

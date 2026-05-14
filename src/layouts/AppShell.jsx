@@ -1,14 +1,17 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { ThemeToggle } from "../components/app/ThemeToggle";
+import { usePagePresence } from "../hooks/usePagePresence";
 
 const navItems = [
   { to: "/", label: "Dashboard" },
   { to: "/analytics", label: "Analytics" },
-  { to: "/operations", label: "Operations" }
+  { to: "/operations", label: "Operations" },
+  { to: "/admin", label: "Admin" }
 ];
 
 export function AppShell() {
   const appTitle = import.meta.env.VITE_APP_TITLE || "Press Radius OPC Dashboard";
+  usePagePresence();
 
   return (
     <div className="app-shell">

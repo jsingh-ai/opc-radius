@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchMachineStatuses } from "../services/machineStatusService";
+import {
+  fetchMachineStatuses,
+  triggerMachineStatusRefresh
+} from "../services/machineStatusService";
 import { formatRelativeCountdown, formatTimestampLabel } from "../utils/formatters";
 
 const DEFAULT_INTERVAL_MINUTES = 5;
@@ -11,10 +14,10 @@ export function useMachineStatusDashboard() {
   const [intervalMinutes, setIntervalMinutes] = useState(DEFAULT_INTERVAL_MINUTES);
   const [lastFetchedAt, setLastFetchedAt] = useState("");
   const [nextRefreshAt, setNextRefreshAt] = useState(Date.now());
-  const [persistence, setPersistence] = useState(null);
+  const [scheduler, setScheduler] = useState(null);
   const timerRef = useRef(null);
 
-  const refreshNow = async () => {
+  const loadCurrentState = async () => {
     setIsLoading(true);
     setError("");
 
@@ -22,7 +25,7 @@ export function useMachineStatusDashboard() {
       const response = await fetchMachineStatuses();
       setMachines(response.machines);
       setLastFetchedAt(response.fetchedAt);
-      setPersistence(response.persistence);
+      setScheduler(response.scheduler);
       setNextRefreshAt(Date.now() + intervalMinutes * 60 * 1000);
     } catch (requestError) {
       setError(
@@ -35,8 +38,26 @@ export function useMachineStatusDashboard() {
     }
   };
 
+  const refreshNow = async () => {
+    setIsLoading(true);
+    setError("");
+
+    try {
+      const response = await triggerMachineStatusRefresh();
+      setScheduler(response.scheduler);
+      await loadCurrentState();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unexpected error while refreshing machine status data."
+      );
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    refreshNow();
+    loadCurrentState();
   }, []);
 
   useEffect(() => {
@@ -47,7 +68,7 @@ export function useMachineStatusDashboard() {
     setNextRefreshAt(Date.now() + intervalMinutes * 60 * 1000);
 
     timerRef.current = window.setInterval(() => {
-      refreshNow();
+      loadCurrentState();
     }, intervalMinutes * 60 * 1000);
 
     return () => {
@@ -69,6 +90,9 @@ export function useMachineStatusDashboard() {
 
   const countdownLabel = formatRelativeCountdown(nextRefreshAt - now);
   const lastFetchedLabel = formatTimestampLabel(lastFetchedAt);
+  const serverRefreshLabel = formatRelativeCountdown(
+    new Date(scheduler?.nextRunAt || Date.now()).getTime() - now
+  );
 
   const summary = useMemo(() => {
     const uniqueStatuses = new Set();
@@ -103,6 +127,8 @@ export function useMachineStatusDashboard() {
     countdownLabel,
     lastFetchedLabel,
     summary,
-    persistence
+    scheduler,
+    serverRefreshLabel,
+    canManualRefresh: Boolean(scheduler?.manualRefreshEnabled)
   };
 }

@@ -5,7 +5,9 @@ export function RefreshControls({
   onIntervalChange,
   countdownLabel,
   lastFetchedLabel,
-  persistence,
+  scheduler,
+  serverRefreshLabel,
+  canManualRefresh,
   isLoading,
   onRefresh
 }) {
@@ -13,7 +15,7 @@ export function RefreshControls({
     <section className="panel refresh-panel">
       <div className="refresh-row">
         <div>
-          <p className="label">Refresh interval</p>
+          <p className="label">Dashboard refresh interval</p>
           <select
             className="select-field"
             value={intervalMinutes}
@@ -27,31 +29,43 @@ export function RefreshControls({
           </select>
         </div>
 
-        <button
-          type="button"
-          className="primary-button"
-          onClick={onRefresh}
-          disabled={isLoading}
-        >
-          {isLoading ? "Refreshing..." : "Refresh now"}
-        </button>
+        {canManualRefresh ? (
+          <button
+            type="button"
+            className="primary-button"
+            onClick={onRefresh}
+            disabled={isLoading}
+          >
+            {isLoading ? "Refreshing..." : "Refresh now"}
+          </button>
+        ) : null}
       </div>
 
       <div className="refresh-meta-grid">
         <div>
-          <p className="label">Next refresh</p>
+          <p className="label">Dashboard refresh</p>
           <p className="value-emphasis">{countdownLabel}</p>
         </div>
         <div>
-          <p className="label">Last fetched</p>
+          <p className="label">Latest DB sync</p>
           <p className="value-emphasis">{lastFetchedLabel}</p>
         </div>
         <div>
-          <p className="label">Database</p>
+          <p className="label">Server polling</p>
           <p className="value-emphasis">
-            {persistence?.persisted
-              ? `Saved ${persistence.count} records`
-              : "Not saved"}
+            {scheduler?.intervalSeconds
+              ? `Every ${scheduler.intervalSeconds} sec`
+              : "Not available"}
+          </p>
+        </div>
+        <div>
+          <p className="label">Next server sync</p>
+          <p className="value-emphasis">{serverRefreshLabel}</p>
+        </div>
+        <div>
+          <p className="label">Scheduler state</p>
+          <p className="value-emphasis">
+            {scheduler?.isRunning ? "Syncing now" : scheduler?.lastSucceededAt ? "Active" : "Starting"}
           </p>
         </div>
       </div>

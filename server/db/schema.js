@@ -29,4 +29,24 @@ export const schemaSql = `
 
   create index if not exists idx_machine_status_current_status_description
     on machine_status_current (status_description);
+
+  create table if not exists dashboard_view_sessions (
+    session_id text primary key,
+    current_path text not null,
+    page_title text,
+    theme text,
+    first_seen_at timestamptz not null,
+    last_seen_at timestamptz not null,
+    last_unloaded_at timestamptz,
+    user_agent text,
+    viewport_width integer,
+    viewport_height integer,
+    meta jsonb not null default '{}'::jsonb
+  );
+
+  create index if not exists idx_dashboard_view_sessions_last_seen_at
+    on dashboard_view_sessions (last_seen_at desc);
+
+  create index if not exists idx_dashboard_view_sessions_current_path
+    on dashboard_view_sessions (current_path);
 `;

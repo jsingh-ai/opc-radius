@@ -1,4 +1,4 @@
-import { apiGet } from "./api/client";
+import { apiGet, apiPost } from "./api/client";
 
 function normalizeMachine(record) {
   return {
@@ -25,17 +25,24 @@ function cleanString(value) {
 
 export async function fetchMachineStatuses() {
   const payload = await apiGet("/api/machine-status/current-status");
-  const rawMachines = Array.isArray(payload?.data)
-    ? payload.data
-    : Array.isArray(payload?.data?.machines)
-      ? payload.data.machines
-      : [];
+  const rawMachines = Array.isArray(payload?.machines) ? payload.machines : [];
 
   return {
     fetchedAt: payload?.fetchedAt || new Date().toISOString(),
-    persistence: payload?.persistence || null,
+    scheduler: payload?.scheduler || null,
     machines: rawMachines
       .map(normalizeMachine)
       .sort((left, right) => left.machineId.localeCompare(right.machineId))
+  };
+}
+
+export async function triggerMachineStatusRefresh() {
+  const payload = await apiPost("/api/machine-status/current-status/refresh");
+
+  return {
+    fetchedAt: payload?.fetchedAt || new Date().toISOString(),
+    scheduler: payload?.scheduler || null,
+    persisted: payload?.persistence || null,
+    skipped: Boolean(payload?.skipped)
   };
 }

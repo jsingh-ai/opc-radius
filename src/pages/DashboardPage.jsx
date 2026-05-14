@@ -13,9 +13,9 @@ export function DashboardPage() {
           <p className="eyebrow">Live Feed</p>
           <h3>Current Status by Machine</h3>
           <p className="hero-copy">
-            This dashboard polls the shopfloor status endpoint through the server
-            proxy, groups data into machine cards, and keeps refresh behavior
-            controllable from the UI.
+            The server polls the shopfloor status endpoint on a fixed schedule,
+            stores the results in PostgreSQL, and this dashboard reads the latest
+            saved machine state for a consistent view across users.
           </p>
         </div>
 
@@ -24,7 +24,9 @@ export function DashboardPage() {
           onIntervalChange={dashboard.setIntervalMinutes}
           countdownLabel={dashboard.countdownLabel}
           lastFetchedLabel={dashboard.lastFetchedLabel}
-          persistence={dashboard.persistence}
+          scheduler={dashboard.scheduler}
+          serverRefreshLabel={dashboard.serverRefreshLabel}
+          canManualRefresh={dashboard.canManualRefresh}
           isLoading={dashboard.isLoading}
           onRefresh={dashboard.refreshNow}
         />

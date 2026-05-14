@@ -1,5 +1,6 @@
 import { createBrowserRouter } from "react-router-dom";
 import { AppShell } from "../layouts/AppShell";
+import { AdminPage } from "../pages/AdminPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
 
@@ -29,6 +30,10 @@ export const router = createBrowserRouter([
             description="Use this space for work-center detail, queue visibility, and operator workflows."
           />
         )
+      },
+      {
+        path: "admin",
+        element: <AdminPage />
       }
     ]
   }

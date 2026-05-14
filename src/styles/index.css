@@ -154,6 +154,33 @@ select {
   gap: 20px;
 }
 
+.admin-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) 1fr;
+  gap: 16px;
+}
+
+.admin-panel {
+  padding: 22px;
+}
+
+.admin-table {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-session-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0;
+  border-top: 1px solid var(--divider);
+}
+
+.admin-empty,
+.admin-note {
+  color: var(--muted);
+}
+
 .hero-panel,
 .panel {
   background: var(--panel-bg);
@@ -362,6 +389,7 @@ select {
   }
 
   .hero-panel,
+  .admin-grid,
   .summary-grid {
     grid-template-columns: 1fr;
   }
