@@ -1,0 +1,2 @@
+# This application runs on Node.js (React + Express) and does not require
+# Python packages for its primary runtime.
