@@ -34,6 +34,15 @@ export async function fetchMachineStatuses() {
   return {
     fetchedAt: payload?.fetchedAt || new Date().toISOString(),
     scheduler: payload?.scheduler || null,
+    debug: {
+      machineCount: rawMachines.length,
+      machineIds: rawMachines.map((machine) => cleanString(machine.machineId)).filter(Boolean).slice(0, 20),
+      statusDescriptions: rawMachines
+        .map((machine) => cleanString(machine.statusDescription))
+        .filter(Boolean)
+        .slice(0, 20),
+      source: payload?.source || null
+    },
     machines: rawMachines
       .map(normalizeMachine)
       .sort((left, right) => left.machineId.localeCompare(right.machineId))

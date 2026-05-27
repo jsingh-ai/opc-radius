@@ -41,6 +41,7 @@ export async function fetchMachineStatusAnalysis(params = {}) {
     availableMachines: Array.isArray(payload?.availableMachines) ? payload.availableMachines : [],
     statusTotals: Array.isArray(payload?.statusTotals) ? payload.statusTotals : [],
     machineBreakdown: Array.isArray(payload?.machineBreakdown) ? payload.machineBreakdown : [],
-    recentIntervals: Array.isArray(payload?.recentIntervals) ? payload.recentIntervals : []
+    recentIntervals: Array.isArray(payload?.recentIntervals) ? payload.recentIntervals : [],
+    debug: payload?.debug || null
   };
 }

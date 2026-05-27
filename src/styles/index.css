@@ -616,6 +616,27 @@ select {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
 
+.analysis-debug-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.debug-panel {
+  align-items: start;
+}
+
+.debug-pre {
+  margin: 0;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.18);
+  overflow: auto;
+  max-height: 340px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
 .machine-analysis-card {
   padding: 22px;
   display: grid;
@@ -891,6 +912,10 @@ select {
   }
 
   .analysis-machine-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-debug-grid {
     grid-template-columns: 1fr;
   }
 

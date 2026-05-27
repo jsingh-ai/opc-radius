@@ -18,7 +18,16 @@ function buildEmptyAnalysis(windowHours) {
     availableMachines: [],
     statusTotals: [],
     machineBreakdown: [],
-    recentIntervals: []
+    recentIntervals: [],
+    debug: {
+      source: "machine_status_history",
+      historyRowCount: 0,
+      availableMachineCount: 0,
+      selectedMachineCount: 0,
+      effectiveSince: generatedAt,
+      requestedUntil: generatedAt,
+      note: "Database is not configured in this app."
+    }
   };
 }
 
@@ -267,6 +276,7 @@ export async function getMachineStatusAnalysis({
   }));
 
   const display = buildDisplayRows(rows, effectiveSince, requestedUntil);
+  const availableMachineIds = machineResult.rows.map((row) => row.machine_id);
 
   return {
     databaseConfigured: true,
@@ -275,9 +285,26 @@ export async function getMachineStatusAnalysis({
     since: effectiveSince.toISOString(),
     until: requestedUntil.toISOString(),
     summary: display.summary,
-    availableMachines: machineResult.rows.map((row) => row.machine_id),
+    availableMachines: availableMachineIds,
     statusTotals: display.statusTotals,
     machineBreakdown: display.machineBreakdown,
-    recentIntervals: display.recentIntervals
+    recentIntervals: display.recentIntervals,
+    debug: {
+      source: "machine_status_history",
+      historyRowCount: rows.length,
+      availableMachineCount: availableMachineIds.length,
+      selectedMachineCount: selectedMachineIds ? selectedMachineIds.length : 0,
+      selectedMachineIds: selectedMachineIds || [],
+      availableMachinePreview: availableMachineIds.slice(0, 20),
+      effectiveSince: effectiveSince.toISOString(),
+      requestedUntil: requestedUntil.toISOString(),
+      summaryMachineCount: display.summary.machineCount,
+      summaryStatusCount: display.summary.statusCount,
+      latestIntervalAt: display.summary.latestIntervalAt,
+      note:
+        rows.length === 0
+          ? "No rows were returned from machine_status_history for the selected filters."
+          : "History rows were returned and aggregated in the application."
+    }
   };
 }

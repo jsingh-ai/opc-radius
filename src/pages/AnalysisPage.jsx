@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { usePageHeader } from "../context/PageHeaderContext";
 import { useMachineStatusAnalysis } from "../hooks/useMachineStatusAnalysis";
+import { fetchMachineStatuses } from "../services/machineStatusService";
 import {
   formatDurationMinutes,
   formatMachineDisplayName,
@@ -127,6 +128,24 @@ function MachineCard({ machine }) {
   );
 }
 
+function DebugCard({ title, data, emptyLabel }) {
+  return (
+    <article className="panel analysis-panel debug-panel">
+      <div className="analysis-panel-header">
+        <div>
+          <p className="eyebrow">Debug</p>
+          <h3>{title}</h3>
+        </div>
+      </div>
+      {data ? (
+        <pre className="debug-pre">{JSON.stringify(data, null, 2)}</pre>
+      ) : (
+        <p className="analysis-empty">{emptyLabel}</p>
+      )}
+    </article>
+  );
+}
+
 export function AnalysisPage() {
   const [draftSince, setDraftSince] = useState(() => toDateTimeLocalValue(new Date(Date.now() - 24 * 60 * 60 * 1000)));
   const [draftUntil, setDraftUntil] = useState(() => toDateTimeLocalValue(new Date()));
@@ -136,7 +155,35 @@ export function AnalysisPage() {
     until: fromDateTimeLocalValue(toDateTimeLocalValue(new Date())),
     machineIds: []
   });
+  const [feedDebug, setFeedDebug] = useState(null);
+  const [feedError, setFeedError] = useState("");
   const { setHeaderState, defaultHeaderState } = usePageHeader();
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadFeedDebug() {
+      try {
+        const response = await fetchMachineStatuses();
+
+        if (isMounted) {
+          setFeedDebug(response.debug || null);
+        }
+      } catch (error) {
+        if (isMounted) {
+          setFeedError(
+            error instanceof Error ? error.message : "Failed to load current machine-status feed."
+          );
+        }
+      }
+    }
+
+    loadFeedDebug();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     setHeaderState({
@@ -410,6 +457,19 @@ export function AnalysisPage() {
             <h3>No machine history was available for the selected window</h3>
           </section>
         ) : null}
+      </section>
+
+      <section className="analysis-debug-grid">
+        <DebugCard
+          title="Current status feed"
+          data={feedError ? { error: feedError } : feedDebug}
+          emptyLabel="No current-status debug data yet."
+        />
+        <DebugCard
+          title="History analysis"
+          data={dashboard.debug}
+          emptyLabel="No analysis debug data yet."
+        />
       </section>
     </section>
   );

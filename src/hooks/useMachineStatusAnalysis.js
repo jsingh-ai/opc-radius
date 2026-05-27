@@ -20,7 +20,8 @@ export function useMachineStatusAnalysis(params) {
     availableMachines: [],
     statusTotals: [],
     machineBreakdown: [],
-    recentIntervals: []
+    recentIntervals: [],
+    debug: null
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
