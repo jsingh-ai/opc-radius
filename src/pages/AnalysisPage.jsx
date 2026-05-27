@@ -346,6 +346,95 @@ function compareRange(range) {
   };
 }
 
+function buildFocusRecommendation(intervals) {
+  const lossIntervals = intervals.filter((interval) => interval.businessState !== "good");
+
+  if (lossIntervals.length === 0) {
+    return {
+      hasRecommendation: false,
+      severity: "neutral",
+      title: "No major loss found for this range.",
+      sentence: "No major loss found for this range.",
+      stateLabel: "None",
+      lostMinutes: 0,
+      topReason: "--",
+      mainPress: null,
+      mainOperator: null,
+      mainJob: null,
+      statusDescription: null,
+      businessState: "all"
+    };
+  }
+
+  const setupMinutes = lossIntervals
+    .filter((interval) => interval.businessState === "setup")
+    .reduce((acc, interval) => acc + interval.minutes, 0);
+  const downtimeMinutes = lossIntervals
+    .filter((interval) => interval.businessState === "downtime")
+    .reduce((acc, interval) => acc + interval.minutes, 0);
+
+  const difference = Math.abs(downtimeMinutes - setupMinutes);
+  const downtimePreferred = downtimeMinutes > setupMinutes || difference <= 5 || (setupMinutes > 0 && difference / setupMinutes <= 0.1);
+  const businessState = downtimePreferred ? "downtime" : "setup";
+  const severity = businessState === "downtime" ? "downtime" : "setup";
+  const stateLabel = businessState === "downtime" ? "Downtime Loss" : "Setup Loss";
+  const bucketRows = lossIntervals.filter((interval) => interval.businessState === businessState);
+  const topReasonRow = bucketRows
+    .reduce((acc, interval) => {
+      const next = acc.get(interval.statusDescription) || 0;
+      acc.set(interval.statusDescription, next + interval.minutes);
+      return acc;
+    }, new Map());
+  const topReason = Array.from(topReasonRow.entries())
+    .map(([statusDescription, minutes]) => ({ statusDescription, minutes }))
+    .sort((left, right) => right.minutes - left.minutes || left.statusDescription.localeCompare(right.statusDescription))[0];
+
+  const pressBucket = bucketRows.reduce((acc, interval) => {
+    acc.set(interval.machineId, (acc.get(interval.machineId) || 0) + interval.minutes);
+    return acc;
+  }, new Map());
+  const operatorBucket = bucketRows.reduce((acc, interval) => {
+    acc.set(interval.operationCode, (acc.get(interval.operationCode) || 0) + interval.minutes);
+    return acc;
+  }, new Map());
+  const jobBucket = bucketRows.reduce((acc, interval) => {
+    acc.set(interval.jobCode, (acc.get(interval.jobCode) || 0) + interval.minutes);
+    return acc;
+  }, new Map());
+
+  const mainPress = Array.from(pressBucket.entries())
+    .map(([machineId, minutes]) => ({ machineId, minutes }))
+    .sort((left, right) => right.minutes - left.minutes || left.machineId.localeCompare(right.machineId))[0] || null;
+  const mainOperator = Array.from(operatorBucket.entries())
+    .map(([operationCode, minutes]) => ({ operationCode, minutes }))
+    .sort((left, right) => right.minutes - left.minutes || left.operationCode.localeCompare(right.operationCode))[0] || null;
+  const mainJob = Array.from(jobBucket.entries())
+    .map(([jobCode, minutes]) => ({ jobCode, minutes }))
+    .sort((left, right) => right.minutes - left.minutes || left.jobCode.localeCompare(right.jobCode))[0] || null;
+
+  const pressName = mainPress ? formatMachineDisplayName(mainPress.machineId) : "this selection";
+  const reasonName = topReason ? topReason.statusDescription : "the top loss reason";
+  const jobName = mainJob?.jobCode || "an unknown job";
+
+  return {
+    hasRecommendation: true,
+    severity,
+    title: stateLabel,
+    sentence:
+      businessState === "downtime"
+        ? `Focus next on ${pressName} downtime losses. ${reasonName} caused ${formatDurationMinutes(topReason?.minutes || 0)} of lost time, mostly on job ${jobName}.`
+        : `Focus next on ${pressName} setup losses. ${reasonName} caused ${formatDurationMinutes(topReason?.minutes || 0)} of lost time, mostly on job ${jobName}.`,
+    stateLabel,
+    lostMinutes: businessState === "downtime" ? downtimeMinutes : setupMinutes,
+    topReason: reasonName,
+    mainPress,
+    mainOperator,
+    mainJob,
+    statusDescription: topReason?.statusDescription || null,
+    businessState
+  };
+}
+
 function matchesFilters(interval, filters) {
   if (filters.businessState !== "all" && interval.businessState !== filters.businessState) {
     return false;
@@ -569,17 +658,16 @@ function Timeline({ intervals, selectedStatusDescription, selectedBusinessState,
               minWidth: `${Math.max(8, interval.minutes * 6)}px`
             }}
             onClick={() => onSelectSegment(interval)}
-            title={`${interval.pressLabel} | ${formatTimestamp(interval.startAt)} - ${formatTimestamp(interval.endAt)}`}
+            title={[
+              interval.pressLabel,
+              `${formatTimestamp(interval.startAt)} - ${formatTimestamp(interval.endAt)}`,
+              interval.eventType || "Unknown event",
+              interval.statusDescription,
+              formatDurationMinutes(interval.minutes),
+              `Operator: ${interval.operationCode || "Unknown Operator"}`,
+              `Job: ${interval.jobCode || "Non Productive / Unknown Job"}`
+            ].join(" | ")}
           >
-            <span className="timeline-segment-tooltip">
-              <strong>{interval.pressLabel}</strong>
-              <span>{formatTimestamp(interval.startAt)} to {formatTimestamp(interval.endAt)}</span>
-              <span>{interval.eventType || "Unknown event"}</span>
-              <span>{interval.statusDescription}</span>
-              <span>{formatDurationMinutes(interval.minutes)}</span>
-              <span>Operator: {interval.operationCode || "Unknown Operator"}</span>
-              <span>Job: {interval.jobCode || "Non Productive / Unknown Job"}</span>
-            </span>
           </button>
         );
       })}
@@ -606,6 +694,80 @@ function DebugPanel({ currentDebug, previousDebug }) {
   );
 }
 
+function FocusNextCard({ recommendation, onDrillInto }) {
+  if (!recommendation?.hasRecommendation) {
+    return (
+      <section className="panel status-analysis-panel focus-next-card focus-next-card-neutral">
+        <SectionHeader
+          eyebrow="Focus next"
+          title="No major loss found for this range."
+          helper="The selected range is mostly clean, so there is no clear next investigation target."
+        />
+      </section>
+    );
+  }
+
+  return (
+    <section className={`panel status-analysis-panel focus-next-card focus-next-card-${recommendation.severity}`}>
+      <SectionHeader
+        eyebrow="Focus next"
+        title="One clear next action"
+        helper="Use this as the first place to inspect before widening the search."
+        meta={<span>{recommendation.stateLabel}</span>}
+      />
+
+      <div className="focus-next-body">
+        <div className="focus-next-copy">
+          <div className="focus-next-severity-row">
+            <span className={`focus-next-severity-chip focus-next-severity-chip-${recommendation.severity}`}>
+              {recommendation.stateLabel}
+            </span>
+            <span className="focus-next-minute-chip">{formatDurationMinutes(recommendation.lostMinutes)} lost</span>
+          </div>
+          <p className="focus-next-sentence">{recommendation.sentence}</p>
+        </div>
+
+        <div className="focus-next-grid">
+          <div className="focus-next-metric">
+            <span>Lost Minutes</span>
+            <strong>{formatDurationMinutes(recommendation.lostMinutes)}</strong>
+          </div>
+          <div className="focus-next-metric">
+            <span>State</span>
+            <strong>{recommendation.stateLabel}</strong>
+          </div>
+          <div className="focus-next-metric">
+            <span>Top Reason</span>
+            <strong>{recommendation.topReason}</strong>
+          </div>
+          <div className="focus-next-metric">
+            <span>Main Press</span>
+            <strong>{recommendation.mainPress ? formatMachineDisplayName(recommendation.mainPress.machineId) : "--"}</strong>
+          </div>
+          <div className="focus-next-metric">
+            <span>Main Operator</span>
+            <strong>{recommendation.mainOperator?.operationCode || "--"}</strong>
+          </div>
+          <div className="focus-next-metric">
+            <span>Main Job</span>
+            <strong>{recommendation.mainJob?.jobCode || "--"}</strong>
+          </div>
+        </div>
+
+        <div className="focus-next-actions">
+          <button
+            type="button"
+            className="analysis-chip analysis-chip-primary"
+            onClick={() => onDrillInto(recommendation)}
+          >
+            Drill Into This
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function AnalysisPage() {
   const now = new Date();
   const todayStart = startOfDay(now);
@@ -626,6 +788,7 @@ export function AnalysisPage() {
   const [activeTab, setActiveTab] = useState("status");
   const [pressToAdd, setPressToAdd] = useState("");
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [compareEnabled, setCompareEnabled] = useState(false);
   const [comparisonSort, setComparisonSort] = useState({ key: "goodPercent", direction: "asc" });
   const [daySort, setDaySort] = useState({ key: "totalMinutes", direction: "desc" });
   const [drillSort, setDrillSort] = useState({ key: "totalMinutes", direction: "desc" });
@@ -661,9 +824,10 @@ export function AnalysisPage() {
       since: previousRange?.since,
       until: previousRange?.until,
       machineIds: selectedMachineIds,
-      refreshNonce
+      refreshNonce,
+      enabled: compareEnabled
     }),
-    [previousRange?.since, previousRange?.until, selectedMachineIds, refreshNonce]
+    [previousRange?.since, previousRange?.until, selectedMachineIds, refreshNonce, compareEnabled]
   );
 
   const analysis = useMachineStatusAnalysis(currentParams);
@@ -672,7 +836,7 @@ export function AnalysisPage() {
   const availableMachines = analysis.availableMachines.length > 0 ? analysis.availableMachines : analysis.filter_options.machineIds;
   const currentIntervals = analysis.intervals || [];
   const comparisonIntervals = previousAnalysis.intervals || [];
-  const canCompare = Boolean(previousRange?.since && previousRange?.until && comparisonIntervals.length > 0);
+  const canCompare = Boolean(compareEnabled && previousRange?.since && previousRange?.until && comparisonIntervals.length > 0);
 
   useEffect(() => {
     if (availableMachines.length === 0) {
@@ -729,6 +893,10 @@ export function AnalysisPage() {
   const drilldownIntervals = useMemo(
     () => currentIntervals.filter((interval) => matchesFilters(interval, drilldownFilters)),
     [currentIntervals, drilldownFilters]
+  );
+  const focusRecommendation = useMemo(
+    () => buildFocusRecommendation(currentIntervals),
+    [currentIntervals]
   );
 
   const lossIntervals = useMemo(() => {
@@ -959,6 +1127,30 @@ export function AnalysisPage() {
     setActiveTab("press");
   }
 
+  function drillIntoRecommendation(recommendation) {
+    if (!recommendation?.hasRecommendation) {
+      return;
+    }
+
+    setBusinessStateFilter(recommendation.businessState);
+    setStatusDescriptionFilter(recommendation.statusDescription || "all");
+    setOperationCodeFilter(recommendation.mainOperator?.operationCode || "all");
+    setJobCodeFilter(recommendation.mainJob?.jobCode || "all");
+
+    if (recommendation.mainPress?.machineId) {
+      setSelectedMachineIds((current) => {
+        if (current.includes(recommendation.mainPress.machineId)) {
+          return current;
+        }
+
+        return [...current, recommendation.mainPress.machineId];
+      });
+      setPrimaryMachineId(recommendation.mainPress.machineId);
+    }
+
+    setActiveTab("status");
+  }
+
   const kpiChange = canCompare
     ? {
         good: getDeltaLabel(currentSummary.goodPercent, previousSummary.goodPercent, "percent"),
@@ -992,9 +1184,14 @@ export function AnalysisPage() {
           <div className="analysis-toolbar-card">
             <div className="analysis-toolbar-card-head">
               <p className="analysis-eyebrow">Date range</p>
-              <button type="button" className="analysis-text-button" onClick={handleRefresh}>
-                Refresh
-              </button>
+              <div className="analysis-toolbar-actions">
+                <button type="button" className="analysis-text-button" onClick={() => setCompareEnabled((current) => !current)}>
+                  {compareEnabled ? "Hide compare" : "Compare previous"}
+                </button>
+                <button type="button" className="analysis-text-button" onClick={handleRefresh}>
+                  Refresh
+                </button>
+              </div>
             </div>
             <div className="analysis-date-grid">
               <label className="analysis-field">
@@ -1157,6 +1354,8 @@ export function AnalysisPage() {
           onClick={() => bestPress && focusPress(bestPress.key)}
         />
       </section>
+
+      <FocusNextCard recommendation={focusRecommendation} onDrillInto={drillIntoRecommendation} />
 
       {analysis.error ? (
         <section className="panel status-analysis-panel analysis-error-banner">

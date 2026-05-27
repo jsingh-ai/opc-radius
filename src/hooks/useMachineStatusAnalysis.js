@@ -58,6 +58,13 @@ export function useMachineStatusAnalysis(params) {
     let isMounted = true;
 
     async function load() {
+      if (params?.enabled === false) {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+        return;
+      }
+
       try {
         if (isMounted) {
           setError("");
@@ -84,11 +91,13 @@ export function useMachineStatusAnalysis(params) {
     }
 
     load();
-    const intervalId = window.setInterval(load, REFRESH_INTERVAL_MS);
+    const intervalId = params?.enabled === false ? null : window.setInterval(load, REFRESH_INTERVAL_MS);
 
     return () => {
       isMounted = false;
-      window.clearInterval(intervalId);
+      if (intervalId) {
+        window.clearInterval(intervalId);
+      }
     };
   }, [params]);
 
