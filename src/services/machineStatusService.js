@@ -1,4 +1,5 @@
 import { apiGet, apiPost } from "./api/client";
+import { formatMachineDisplayName } from "../utils/formatters";
 
 function normalizeMachine(record) {
   const machineId = cleanString(record.machineId) || "Unknown";
@@ -7,7 +8,7 @@ function normalizeMachine(record) {
     kco: record.kco ?? "--",
     plantCode: record.plantCode ?? "--",
     machineId,
-    displayName: buildMachineDisplayName(machineId),
+    displayName: formatMachineDisplayName(machineId),
     jobCode: cleanString(record.jobCode),
     operationCode: cleanString(record.operationCode),
     eventType: cleanString(record.eventType),
@@ -24,20 +25,6 @@ function cleanString(value) {
   }
 
   return String(value).trim();
-}
-
-function buildMachineDisplayName(machineId) {
-  const digits = String(machineId).replace(/\D/g, "");
-
-  if (digits.length >= 3) {
-    const pressNumber = Number(digits.slice(-2));
-
-    if (!Number.isNaN(pressNumber) && pressNumber > 0) {
-      return `Press ${pressNumber}`;
-    }
-  }
-
-  return `Press ${machineId}`;
 }
 
 export async function fetchMachineStatuses() {

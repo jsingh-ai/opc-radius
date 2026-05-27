@@ -24,6 +24,7 @@ React + Vite frontend with an Express API layer for secure machine-status pollin
 - The server scheduler polls the upstream machine-status API every `SHOPFLOOR_POLLING_INTERVAL_SECONDS`
 - The dashboard reads the latest persisted DB state instead of directly driving upstream polling
 - The dashboard refresh control only changes how often each browser rereads the saved DB-backed data
+- The analysis page reads `/api/machine-status/analysis` and summarizes the history table by time window
 
 ## Security And Runtime Notes
 

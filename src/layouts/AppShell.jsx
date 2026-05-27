@@ -5,6 +5,7 @@ import { usePagePresence } from "../hooks/usePagePresence";
 
 const navItems = [
   { to: "/", label: "Dashboard" },
+  { to: "/analysis", label: "Analysis" },
   { to: "/admin", label: "Admin" }
 ];
 

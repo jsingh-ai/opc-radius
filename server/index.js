@@ -18,6 +18,7 @@ import {
   getDashboardPresenceSummary,
   upsertDashboardPresence
 } from "./repositories/dashboardPresenceRepository.js";
+import { getMachineStatusAnalysis } from "./repositories/machineStatusAnalysisRepository.js";
 import {
   getSchedulerState,
   startMachineStatusScheduler,
@@ -56,6 +57,38 @@ app.get("/api/machine-status/current-status", asyncHandler(async (_req, res) => 
   const statusResult = await getCurrentMachineStatuses();
   res.json({
     ...statusResult,
+    scheduler: getSchedulerState()
+  });
+}));
+
+app.get("/api/machine-status/analysis", asyncHandler(async (req, res) => {
+  const rawWindowHours = Number.parseInt(req.query.windowHours, 10);
+  const windowHours = Number.isFinite(rawWindowHours)
+    ? Math.min(24 * 31, Math.max(1, rawWindowHours))
+    : 24;
+
+  const since = req.query.since ? new Date(String(req.query.since)) : null;
+  const until = req.query.until ? new Date(String(req.query.until)) : null;
+  const machineIds = typeof req.query.machineIds === "string"
+    ? req.query.machineIds
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    : [];
+  const hasCustomRange =
+    since instanceof Date &&
+    !Number.isNaN(since.getTime()) &&
+    until instanceof Date &&
+    !Number.isNaN(until.getTime()) &&
+    since.getTime() < until.getTime();
+
+  const result = await getMachineStatusAnalysis(
+    hasCustomRange
+      ? { since, until, machineIds }
+      : { windowHours, machineIds }
+  );
+  res.json({
+    ...result,
     scheduler: getSchedulerState()
   });
 }));
