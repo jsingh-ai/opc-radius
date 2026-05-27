@@ -23,6 +23,10 @@ function buildQueryString(params) {
   return query ? `?${query}` : "";
 }
 
+function normalizeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 export async function fetchMachineStatusAnalysis(params = {}) {
   const payload = await apiGet(`/api/machine-status/analysis${buildQueryString(params)}`);
 
@@ -32,16 +36,36 @@ export async function fetchMachineStatusAnalysis(params = {}) {
     windowHours: payload?.windowHours ?? params.windowHours ?? 24,
     since: payload?.since || null,
     until: payload?.until || null,
+    availableMachines: normalizeArray(payload?.availableMachines),
+    primaryMachineId: payload?.primaryMachineId || null,
+    intervals: normalizeArray(payload?.intervals),
     summary: payload?.summary || {
-      machineCount: 0,
-      trackedMinutes: 0,
-      statusCount: 0,
-      latestIntervalAt: null
+      goodMinutes: 0,
+      setupMinutes: 0,
+      downtimeMinutes: 0,
+      totalObservedMinutes: 0,
+      totalObservedHours: 0,
+      goodPercent: 0,
+      setupPercent: 0,
+      downtimePercent: 0,
+      biggestLossReason: "--",
+      worstSelectedPress: "--",
+      bestSelectedPress: "--",
+      sampleCount: 0
     },
-    availableMachines: Array.isArray(payload?.availableMachines) ? payload.availableMachines : [],
-    statusTotals: Array.isArray(payload?.statusTotals) ? payload.statusTotals : [],
-    machineBreakdown: Array.isArray(payload?.machineBreakdown) ? payload.machineBreakdown : [],
-    recentIntervals: Array.isArray(payload?.recentIntervals) ? payload.recentIntervals : [],
+    selected_press_timeline: payload?.selected_press_timeline || { machineId: null, displayName: "", intervals: [] },
+    press_comparison: normalizeArray(payload?.press_comparison),
+    day_breakdown: normalizeArray(payload?.day_breakdown),
+    status_breakdown: normalizeArray(payload?.status_breakdown),
+    operator_breakdown: normalizeArray(payload?.operator_breakdown),
+    job_breakdown: normalizeArray(payload?.job_breakdown),
+    filter_options: payload?.filter_options || {
+      machineIds: [],
+      eventTypes: [],
+      statusDescriptions: [],
+      operationCodes: [],
+      jobCodes: []
+    },
     debug: payload?.debug || null
   };
 }

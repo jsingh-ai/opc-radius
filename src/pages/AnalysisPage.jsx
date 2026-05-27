@@ -1,12 +1,70 @@
 import { useEffect, useMemo, useState } from "react";
 import { usePageHeader } from "../context/PageHeaderContext";
 import { useMachineStatusAnalysis } from "../hooks/useMachineStatusAnalysis";
-import { fetchMachineStatuses } from "../services/machineStatusService";
 import {
   formatDurationMinutes,
   formatMachineDisplayName,
   formatPercent
 } from "../utils/formatters";
+import "../styles/analysis.css";
+
+const BUSINESS_STATE_OPTIONS = [
+  { label: "All", value: "all" },
+  { label: "Running", value: "good" },
+  { label: "Setup", value: "setup" },
+  { label: "Downtime", value: "downtime" }
+];
+
+const DRILL_TABS = [
+  {
+    label: "Status Reasons",
+    value: "status",
+    helper: "Breaks time into the actual reasons behind loss."
+  },
+  {
+    label: "Operators",
+    value: "operator",
+    helper: "Shows whether an operator or crew pattern lines up with the loss."
+  },
+  {
+    label: "Jobs",
+    value: "job",
+    helper: "Compares the active job codes and where time is being spent."
+  },
+  {
+    label: "Presses",
+    value: "press",
+    helper: "Ranks presses so you can see which machines are underperforming."
+  },
+  {
+    label: "Days",
+    value: "day",
+    helper: "Highlights whether one day was worse or better than another."
+  }
+];
+
+const QUICK_RANGES = [
+  { label: "Today", value: "today" },
+  { label: "Yesterday", value: "yesterday" },
+  { label: "Last 7 Days", value: "last7" },
+  { label: "This Week", value: "thisWeek" }
+];
+
+const EMPTY_SUMMARY = {
+  goodMinutes: 0,
+  setupMinutes: 0,
+  downtimeMinutes: 0,
+  totalObservedMinutes: 0,
+  totalObservedHours: 0,
+  goodPercent: 0,
+  setupPercent: 0,
+  downtimePercent: 0,
+  biggestLossReason: "--",
+  worstSelectedPress: "--",
+  bestSelectedPress: "--",
+  sampleCount: 0,
+  latestIntervalAt: null
+};
 
 function toDateTimeLocalValue(date) {
   const year = date.getFullYear();
@@ -39,158 +97,546 @@ function formatTimestamp(timestamp) {
   }).format(new Date(timestamp));
 }
 
-function AnalysisMetric({ label, value, detail }) {
+function formatDay(timestamp) {
+  if (!timestamp) {
+    return "--";
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric"
+  }).format(new Date(timestamp));
+}
+
+function formatHours(minutes) {
+  return `${(Number(minutes || 0) / 60).toFixed(1)}h`;
+}
+
+function startOfDay(date) {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function startOfWeek(date) {
+  const next = startOfDay(date);
+  const day = next.getDay();
+  const offset = (day + 6) % 7;
+  next.setDate(next.getDate() - offset);
+  return next;
+}
+
+function getRangePreset(preset) {
+  const now = new Date();
+
+  if (preset === "yesterday") {
+    const start = startOfDay(now);
+    start.setDate(start.getDate() - 1);
+    return { since: start, until: startOfDay(now) };
+  }
+
+  if (preset === "last7") {
+    const until = new Date(now);
+    const since = new Date(now);
+    since.setDate(since.getDate() - 7);
+    return { since, until };
+  }
+
+  if (preset === "thisWeek") {
+    return { since: startOfWeek(now), until: now };
+  }
+
+  return { since: startOfDay(now), until: now };
+}
+
+function getBusinessStateLabel(state) {
+  if (state === "good") {
+    return "Running";
+  }
+
+  if (state === "setup") {
+    return "Setup";
+  }
+
+  if (state === "downtime") {
+    return "Downtime";
+  }
+
+  return "All";
+}
+
+function getBusinessStateClass(state) {
+  if (state === "good") {
+    return "good";
+  }
+
+  if (state === "setup") {
+    return "setup";
+  }
+
+  if (state === "downtime") {
+    return "downtime";
+  }
+
+  return "unknown";
+}
+
+function summarizeIntervals(intervals) {
+  const totals = intervals.reduce(
+    (acc, interval) => {
+      if (interval.businessState === "good") {
+        acc.goodMinutes += interval.minutes;
+      } else if (interval.businessState === "setup") {
+        acc.setupMinutes += interval.minutes;
+      } else {
+        acc.downtimeMinutes += interval.minutes;
+      }
+
+      return acc;
+    },
+    { goodMinutes: 0, setupMinutes: 0, downtimeMinutes: 0 }
+  );
+
+  const totalObservedMinutes = totals.goodMinutes + totals.setupMinutes + totals.downtimeMinutes;
+  const lossBuckets = new Map();
+
+  for (const interval of intervals) {
+    if (interval.businessState === "good") {
+      continue;
+    }
+
+    lossBuckets.set(
+      interval.statusDescription,
+      (lossBuckets.get(interval.statusDescription) || 0) + interval.minutes
+    );
+  }
+
+  const biggestLossReason = Array.from(lossBuckets.entries())
+    .map(([statusDescription, minutes]) => ({ statusDescription, minutes }))
+    .sort((left, right) => right.minutes - left.minutes || left.statusDescription.localeCompare(right.statusDescription))[0];
+
+  return {
+    goodMinutes: totals.goodMinutes,
+    setupMinutes: totals.setupMinutes,
+    downtimeMinutes: totals.downtimeMinutes,
+    totalObservedMinutes,
+    totalObservedHours: totalObservedMinutes / 60,
+    goodPercent: totalObservedMinutes > 0 ? totals.goodMinutes / totalObservedMinutes : 0,
+    setupPercent: totalObservedMinutes > 0 ? totals.setupMinutes / totalObservedMinutes : 0,
+    downtimePercent: totalObservedMinutes > 0 ? totals.downtimeMinutes / totalObservedMinutes : 0,
+    biggestLossReason: biggestLossReason ? biggestLossReason.statusDescription : "--",
+    biggestLossMinutes: biggestLossReason ? biggestLossReason.minutes : 0,
+    sampleCount: intervals.length
+  };
+}
+
+function aggregateIntervals(intervals, keyFn, labelFn) {
+  const buckets = new Map();
+
+  for (const interval of intervals) {
+    const key = keyFn(interval);
+    if (key === null || key === undefined || key === "") {
+      continue;
+    }
+
+    const bucket = buckets.get(key) || {
+      key,
+      label: labelFn ? labelFn(interval, key) : String(key),
+      sampleCount: 0,
+      goodMinutes: 0,
+      setupMinutes: 0,
+      downtimeMinutes: 0,
+      totalMinutes: 0,
+      topLossReason: "--",
+      topLossMinutes: 0,
+      statusBuckets: new Map()
+    };
+
+    bucket.sampleCount += 1;
+    bucket.totalMinutes += interval.minutes;
+
+    if (interval.businessState === "good") {
+      bucket.goodMinutes += interval.minutes;
+    } else if (interval.businessState === "setup") {
+      bucket.setupMinutes += interval.minutes;
+    } else {
+      bucket.downtimeMinutes += interval.minutes;
+    }
+
+    const statusKey = interval.statusDescription || "Unknown";
+    bucket.statusBuckets.set(statusKey, (bucket.statusBuckets.get(statusKey) || 0) + interval.minutes);
+    buckets.set(key, bucket);
+  }
+
+  return Array.from(buckets.values())
+    .map((bucket) => {
+      const statusRows = Array.from(bucket.statusBuckets.entries())
+        .map(([statusDescription, minutes]) => ({ statusDescription, minutes }))
+        .sort((left, right) => right.minutes - left.minutes || left.statusDescription.localeCompare(right.statusDescription));
+
+      const topLoss = statusRows.find((row) => row.statusDescription !== "Run Production") || statusRows[0] || null;
+      const totalMinutes = bucket.totalMinutes;
+
+      return {
+        key: bucket.key,
+        label: bucket.label,
+        sampleCount: bucket.sampleCount,
+        sampleHours: bucket.sampleCount / 60,
+        goodMinutes: bucket.goodMinutes,
+        setupMinutes: bucket.setupMinutes,
+        downtimeMinutes: bucket.downtimeMinutes,
+        totalMinutes,
+        goodPercent: totalMinutes > 0 ? bucket.goodMinutes / totalMinutes : 0,
+        setupPercent: totalMinutes > 0 ? bucket.setupMinutes / totalMinutes : 0,
+        downtimePercent: totalMinutes > 0 ? bucket.downtimeMinutes / totalMinutes : 0,
+        topLossReason: topLoss ? topLoss.statusDescription : "--",
+        topLossMinutes: topLoss ? topLoss.minutes : 0,
+        statusRows
+      };
+    })
+    .sort((left, right) => right.totalMinutes - left.totalMinutes || String(left.label).localeCompare(String(right.label)));
+}
+
+function getDeltaLabel(currentValue, previousValue, kind = "percent") {
+  if (!Number.isFinite(currentValue) || !Number.isFinite(previousValue)) {
+    return null;
+  }
+
+  if (kind === "hours") {
+    const delta = currentValue - previousValue;
+    const sign = delta > 0 ? "+" : "";
+    return `${sign}${delta.toFixed(1)}h`;
+  }
+
+  if (kind === "minutes") {
+    const delta = currentValue - previousValue;
+    const sign = delta > 0 ? "+" : "";
+    return `${sign}${Math.round(delta)}m`;
+  }
+
+  const delta = (currentValue - previousValue) * 100;
+  const sign = delta > 0 ? "+" : "";
+  return `${sign}${delta.toFixed(1)} pp`;
+}
+
+function formatRangeLabel(since, until) {
+  if (!since || !until) {
+    return "--";
+  }
+
+  return `${formatTimestamp(since)} to ${formatTimestamp(until)}`;
+}
+
+function compareRange(range) {
+  if (!range?.since || !range?.until) {
+    return null;
+  }
+
+  const since = new Date(range.since);
+  const until = new Date(range.until);
+  if (Number.isNaN(since.getTime()) || Number.isNaN(until.getTime()) || until <= since) {
+    return null;
+  }
+
+  const durationMs = until.getTime() - since.getTime();
+  return {
+    since: new Date(since.getTime() - durationMs).toISOString(),
+    until: since.toISOString()
+  };
+}
+
+function matchesFilters(interval, filters) {
+  if (filters.businessState !== "all" && interval.businessState !== filters.businessState) {
+    return false;
+  }
+
+  if (filters.eventType !== "all" && interval.eventType !== filters.eventType) {
+    return false;
+  }
+
+  if (filters.statusDescription !== "all" && interval.statusDescription !== filters.statusDescription) {
+    return false;
+  }
+
+  if (filters.operationCode !== "all" && interval.operationCode !== filters.operationCode) {
+    return false;
+  }
+
+  if (filters.jobCode !== "all" && interval.jobCode !== filters.jobCode) {
+    return false;
+  }
+
+  return true;
+}
+
+function percentageWidth(minutes, totalMinutes) {
+  if (!totalMinutes) {
+    return "0%";
+  }
+
+  return `${Math.max(4, (minutes / totalMinutes) * 100)}%`;
+}
+
+function KpiCard({ label, value, subtitle, change, tone, active, onClick }) {
+  const classes = [
+    "kpi-card",
+    tone ? `kpi-card-${tone}` : "",
+    active ? "kpi-card-active" : "",
+    onClick ? "kpi-card-clickable" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <article className="panel metric-card">
-      <p className="label">{label}</p>
-      <h3>{value}</h3>
-      {detail ? <p className="metric-detail">{detail}</p> : null}
-    </article>
+    <button type="button" className={classes} onClick={onClick}>
+      <span className="kpi-label">{label}</span>
+      <strong className="kpi-value">{value}</strong>
+      <span className="kpi-subtitle">{subtitle}</span>
+      {change ? <span className={`kpi-change ${change.direction}`}>{change.label}</span> : null}
+    </button>
   );
 }
 
-function StatusStack({ statusTotals, totalMinutes }) {
+function StateChip({ label, value, active, onClick }) {
   return (
-    <div className="status-stack" aria-hidden="true">
-      {statusTotals.map((status) => (
-        <span
-          key={status.statusDescription}
-          className="status-segment"
-          title={`${status.statusDescription}: ${formatDurationMinutes(status.trackedMinutes)} (${formatPercent(status.trackedMinutes, totalMinutes)})`}
-          style={{
-            width: `${Math.max(1, (status.trackedMinutes / Math.max(1, totalMinutes)) * 100)}%`
-          }}
-        />
-      ))}
-    </div>
+    <button
+      type="button"
+      className={active ? "state-chip state-chip-active" : "state-chip"}
+      onClick={onClick}
+    >
+      {label}
+    </button>
   );
 }
 
-function StatusLegend({ statusTotals, totalMinutes }) {
+function SectionHeader({ eyebrow, title, helper, meta }) {
   return (
-    <div className="status-legend">
-      {statusTotals.map((status) => (
-        <div key={status.statusDescription} className="status-legend-row">
-          <div>
-            <strong>{status.statusDescription}</strong>
-            <p>
-              {formatDurationMinutes(status.trackedMinutes)} · {formatPercent(status.trackedMinutes, totalMinutes)}
-            </p>
-          </div>
-          <span className="status-legend-percent">{formatPercent(status.trackedMinutes, totalMinutes)}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function MachineCard({ machine }) {
-  const displayName = formatMachineDisplayName(machine.machineId);
-  const dominantStatus = machine.statusTotals[0] || null;
-
-  return (
-    <article className="panel machine-analysis-card">
-      <div className="analysis-panel-header">
-        <div>
-          <p className="eyebrow">Press</p>
-          <h3>{displayName}</h3>
-          <p className="analysis-subtitle">{machine.machineId}</p>
-        </div>
-        <div className="analysis-card-meta">
-          <p className="label">Tracked</p>
-          <strong>{formatDurationMinutes(machine.trackedMinutes)}</strong>
-        </div>
+    <div className="analysis-section-header">
+      <div>
+        <p className="analysis-eyebrow">{eyebrow}</p>
+        <h3>{title}</h3>
+        {helper ? <p className="analysis-helper">{helper}</p> : null}
       </div>
+      {meta ? <div className="analysis-section-meta">{meta}</div> : null}
+    </div>
+  );
+}
 
-      {dominantStatus ? (
-        <p className="analysis-card-dominant">
-          Dominant status: <strong>{dominantStatus.statusDescription}</strong>
-        </p>
+function EmptyState({ title, description }) {
+  return (
+    <div className="analysis-empty-state">
+      <strong>{title}</strong>
+      <p>{description}</p>
+    </div>
+  );
+}
+
+function SkeletonBlock() {
+  return <div className="skeleton-block" />;
+}
+
+function LoadingSkeleton() {
+  return (
+    <section className="analysis-loading-grid">
+      <div className="panel status-analysis-panel">
+        <SkeletonBlock />
+        <SkeletonBlock />
+        <SkeletonBlock />
+      </div>
+      <div className="panel status-analysis-panel">
+        <SkeletonBlock />
+        <SkeletonBlock />
+        <SkeletonBlock />
+      </div>
+    </section>
+  );
+}
+
+function PercentCell({ value, totalMinutes, tone }) {
+  return (
+    <div className="percent-cell">
+      <div className="percent-cell-top">
+        <strong>{formatPercent(value, totalMinutes)}</strong>
+        <span>{formatDurationMinutes(value)}</span>
+      </div>
+      <div className="percent-meter">
+        <span className={`percent-fill percent-fill-${tone}`} style={{ width: percentageWidth(value, totalMinutes) }} />
+      </div>
+    </div>
+  );
+}
+
+function MetricTable({ rows, sortKey, onSortChange, columns, emptyLabel, highlightKey, kind = "comparison" }) {
+  if (!rows.length) {
+    return <EmptyState title="No data for selected range" description={emptyLabel} />;
+  }
+
+  return (
+    <div className="table-shell">
+      <table className="comparison-table">
+        <thead>
+          <tr>
+            {columns.map((column) => (
+              <th key={column.key} className={column.numeric ? "align-right" : ""}>
+                {column.sortable ? (
+                  <button
+                    type="button"
+                    className="table-sort-button"
+                    onClick={() => onSortChange(column.key)}
+                  >
+                    <span>{column.label}</span>
+                    <span className="sort-arrow">
+                      {sortKey.key === column.key ? (sortKey.direction === "asc" ? "▲" : "▼") : "↕"}
+                    </span>
+                  </button>
+                ) : (
+                  <span>{column.label}</span>
+                )}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key} className={highlightKey && row.key === highlightKey ? "comparison-row-highlight" : ""}>
+              <td>
+                <div className="comparison-primary">
+                  <strong>{row.label}</strong>
+                  <span>
+                    {row.sampleCount} samples · {formatHours(row.totalMinutes)}
+                  </span>
+                </div>
+              </td>
+              <td className="align-right"><PercentCell value={row.goodMinutes} totalMinutes={row.totalMinutes} tone="good" /></td>
+              <td className="align-right"><PercentCell value={row.setupMinutes} totalMinutes={row.totalMinutes} tone="setup" /></td>
+              <td className="align-right"><PercentCell value={row.downtimeMinutes} totalMinutes={row.totalMinutes} tone="downtime" /></td>
+              <td className="align-right">{formatHours(row.totalMinutes)}</td>
+              <td>
+                <div className="comparison-loss">
+                  <strong>{row.topLossReason}</strong>
+                  <span>{formatPercent(row.topLossMinutes, row.totalMinutes)}</span>
+                </div>
+              </td>
+              <td className="align-right">{formatDurationMinutes(row.topLossMinutes)}</td>
+              <td>
+                <div className="mix-bar" aria-hidden="true">
+                  <span className="mix-bar-good" style={{ width: percentageWidth(row.goodMinutes, row.totalMinutes) }} />
+                  <span className="mix-bar-setup" style={{ width: percentageWidth(row.setupMinutes, row.totalMinutes) }} />
+                  <span className="mix-bar-downtime" style={{ width: percentageWidth(row.downtimeMinutes, row.totalMinutes) }} />
+                </div>
+              </td>
+              {kind === "drilldown" ? <td className="align-right">{row.sampleCount}</td> : null}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Timeline({ intervals, selectedStatusDescription, selectedBusinessState, onSelectSegment }) {
+  if (!intervals.length) {
+    return (
+      <EmptyState
+        title="No timeline data"
+        description="The selected press has no data in the chosen range."
+      />
+    );
+  }
+
+  return (
+    <div className="timeline-track">
+      {intervals.map((interval) => {
+        const stateClass = interval.businessState || "unknown";
+        const isSelected = selectedStatusDescription === interval.statusDescription;
+        const isMuted = selectedBusinessState !== "all" && selectedBusinessState !== interval.businessState;
+
+        return (
+          <button
+            key={`${interval.machineId}-${interval.startAt}-${interval.endAt}`}
+            type="button"
+            className={[
+              "timeline-segment",
+              `timeline-segment-${stateClass}`,
+              isSelected ? "timeline-segment-selected" : "",
+              isMuted ? "timeline-segment-muted" : ""
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            style={{
+              flexGrow: Math.max(interval.minutes, 1),
+              minWidth: `${Math.max(8, interval.minutes * 6)}px`
+            }}
+            onClick={() => onSelectSegment(interval)}
+            title={`${interval.pressLabel} | ${formatTimestamp(interval.startAt)} - ${formatTimestamp(interval.endAt)}`}
+          >
+            <span className="timeline-segment-tooltip">
+              <strong>{interval.pressLabel}</strong>
+              <span>{formatTimestamp(interval.startAt)} to {formatTimestamp(interval.endAt)}</span>
+              <span>{interval.eventType || "Unknown event"}</span>
+              <span>{interval.statusDescription}</span>
+              <span>{formatDurationMinutes(interval.minutes)}</span>
+              <span>Operator: {interval.operationCode || "Unknown Operator"}</span>
+              <span>Job: {interval.jobCode || "Non Productive / Unknown Job"}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DebugPanel({ currentDebug, previousDebug }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <section className="panel status-analysis-panel developer-debug-panel">
+      <button type="button" className="debug-toggle-button" onClick={() => setOpen((current) => !current)}>
+        <span>Developer Debug</span>
+        <strong>{open ? "Hide" : "Show"}</strong>
+      </button>
+      {open ? (
+        <div className="debug-grid">
+          <pre className="debug-pre">{JSON.stringify(currentDebug, null, 2)}</pre>
+          <pre className="debug-pre">{JSON.stringify(previousDebug, null, 2)}</pre>
+        </div>
       ) : null}
-
-      <StatusStack statusTotals={machine.statusTotals} totalMinutes={machine.trackedMinutes} />
-
-      <div className="machine-status-breakdown">
-        {machine.statusTotals.map((status) => (
-          <div key={status.statusDescription} className="machine-status-row">
-            <div className="machine-status-name">
-              <strong>{status.statusDescription}</strong>
-              <span>{formatPercent(status.trackedMinutes, machine.trackedMinutes)}</span>
-            </div>
-            <div className="machine-status-values">
-              <span>{formatDurationMinutes(status.trackedMinutes)}</span>
-              <span>{Math.round(status.trackedMinutes)} min</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </article>
-  );
-}
-
-function DebugCard({ title, data, emptyLabel }) {
-  return (
-    <article className="panel analysis-panel debug-panel">
-      <div className="analysis-panel-header">
-        <div>
-          <p className="eyebrow">Debug</p>
-          <h3>{title}</h3>
-        </div>
-      </div>
-      {data ? (
-        <pre className="debug-pre">{JSON.stringify(data, null, 2)}</pre>
-      ) : (
-        <p className="analysis-empty">{emptyLabel}</p>
-      )}
-    </article>
+    </section>
   );
 }
 
 export function AnalysisPage() {
-  const [draftSince, setDraftSince] = useState(() => toDateTimeLocalValue(new Date(Date.now() - 24 * 60 * 60 * 1000)));
-  const [draftUntil, setDraftUntil] = useState(() => toDateTimeLocalValue(new Date()));
-  const [draftMachineIds, setDraftMachineIds] = useState([]);
-  const [appliedFilters, setAppliedFilters] = useState({
-    since: fromDateTimeLocalValue(toDateTimeLocalValue(new Date(Date.now() - 24 * 60 * 60 * 1000))),
-    until: fromDateTimeLocalValue(toDateTimeLocalValue(new Date())),
-    machineIds: []
+  const now = new Date();
+  const todayStart = startOfDay(now);
+
+  const [draftSince, setDraftSince] = useState(() => toDateTimeLocalValue(todayStart));
+  const [draftUntil, setDraftUntil] = useState(() => toDateTimeLocalValue(now));
+  const [appliedRange, setAppliedRange] = useState({
+    since: todayStart.toISOString(),
+    until: now.toISOString()
   });
-  const [feedDebug, setFeedDebug] = useState(null);
-  const [feedError, setFeedError] = useState("");
+  const [selectedMachineIds, setSelectedMachineIds] = useState(["205"]);
+  const [primaryMachineId, setPrimaryMachineId] = useState("205");
+  const [businessStateFilter, setBusinessStateFilter] = useState("all");
+  const [eventTypeFilter, setEventTypeFilter] = useState("all");
+  const [statusDescriptionFilter, setStatusDescriptionFilter] = useState("all");
+  const [operationCodeFilter, setOperationCodeFilter] = useState("all");
+  const [jobCodeFilter, setJobCodeFilter] = useState("all");
+  const [activeTab, setActiveTab] = useState("status");
+  const [pressToAdd, setPressToAdd] = useState("");
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [comparisonSort, setComparisonSort] = useState({ key: "goodPercent", direction: "asc" });
+  const [daySort, setDaySort] = useState({ key: "totalMinutes", direction: "desc" });
+  const [drillSort, setDrillSort] = useState({ key: "totalMinutes", direction: "desc" });
   const { setHeaderState, defaultHeaderState } = usePageHeader();
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function loadFeedDebug() {
-      try {
-        const response = await fetchMachineStatuses();
-
-        if (isMounted) {
-          setFeedDebug(response.debug || null);
-        }
-      } catch (error) {
-        if (isMounted) {
-          setFeedError(
-            error instanceof Error ? error.message : "Failed to load current machine-status feed."
-          );
-        }
-      }
-    }
-
-    loadFeedDebug();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
     setHeaderState({
-      eyebrow: "Historical Analysis",
-      title: "Status Time Analysis",
-      detailLabel: "Window",
-      detailValue: "Custom range"
+      eyebrow: "Industrial Analysis",
+      title: "Press Loss Investigation",
+      detailLabel: "Range",
+      detailValue: "Today"
     });
 
     return () => {
@@ -198,279 +644,776 @@ export function AnalysisPage() {
     };
   }, [defaultHeaderState, setHeaderState]);
 
-  const analysisParams = useMemo(
+  const currentParams = useMemo(
     () => ({
-      since: appliedFilters.since,
-      until: appliedFilters.until,
-      machineIds: appliedFilters.machineIds
+      since: appliedRange.since,
+      until: appliedRange.until,
+      machineIds: selectedMachineIds,
+      refreshNonce
     }),
-    [appliedFilters]
+    [appliedRange.since, appliedRange.until, selectedMachineIds, refreshNonce]
   );
 
-  const dashboard = useMachineStatusAnalysis(analysisParams);
-  const availableMachines = dashboard.availableMachines;
+  const previousRange = useMemo(() => compareRange(appliedRange), [appliedRange]);
+
+  const previousParams = useMemo(
+    () => ({
+      since: previousRange?.since,
+      until: previousRange?.until,
+      machineIds: selectedMachineIds,
+      refreshNonce
+    }),
+    [previousRange?.since, previousRange?.until, selectedMachineIds, refreshNonce]
+  );
+
+  const analysis = useMachineStatusAnalysis(currentParams);
+  const previousAnalysis = useMachineStatusAnalysis(previousParams);
+
+  const availableMachines = analysis.availableMachines.length > 0 ? analysis.availableMachines : analysis.filter_options.machineIds;
+  const currentIntervals = analysis.intervals || [];
+  const comparisonIntervals = previousAnalysis.intervals || [];
+  const canCompare = Boolean(previousRange?.since && previousRange?.until && comparisonIntervals.length > 0);
 
   useEffect(() => {
-    if (availableMachines.length > 0 && draftMachineIds.length === 0) {
-      const machineIds = availableMachines;
-      setDraftMachineIds(machineIds);
-      setAppliedFilters((current) => ({
-        ...current,
-        machineIds
-      }));
+    if (availableMachines.length === 0) {
+      return;
     }
-  }, [availableMachines, draftMachineIds.length]);
 
-  const latestRangeLabel = dashboard.since && dashboard.until
-    ? `${formatTimestamp(dashboard.since)} - ${formatTimestamp(dashboard.until)}`
-    : "No range selected";
+    setSelectedMachineIds((current) => {
+      const filtered = current.filter((machineId) => availableMachines.includes(machineId));
+      if (filtered.length > 0) {
+        return filtered;
+      }
 
-  const topStatus = useMemo(() => dashboard.statusTotals[0] || null, [dashboard.statusTotals]);
+      return availableMachines.includes("205") ? ["205"] : [availableMachines[0]];
+    });
 
-  function handleToggleMachine(machineId) {
-    setDraftMachineIds((current) => (
-      current.includes(machineId)
-        ? current.filter((value) => value !== machineId)
-        : [...current, machineId]
-    ));
-  }
+    setPrimaryMachineId((current) => {
+      if (availableMachines.includes(current)) {
+        return current;
+      }
 
-  function handleSelectAll() {
-    const machineIds = availableMachines.map((machine) => machine.machineId);
-    setDraftMachineIds(machineIds);
-  }
+      return availableMachines.includes("205") ? "205" : availableMachines[0];
+    });
+  }, [availableMachines]);
 
-  function handleClearAll() {
-    setDraftMachineIds([]);
-  }
+  const selectedMachineCount = selectedMachineIds.length;
 
-  function handleApplyFilters() {
-    setAppliedFilters({
-      since: fromDateTimeLocalValue(draftSince),
-      until: fromDateTimeLocalValue(draftUntil),
-      machineIds: draftMachineIds
+  const selectedMachineOptions = useMemo(
+    () => availableMachines.filter((machineId) => !selectedMachineIds.includes(machineId)),
+    [availableMachines, selectedMachineIds]
+  );
+
+  const currentSummary = useMemo(() => summarizeIntervals(currentIntervals), [currentIntervals]);
+  const previousSummary = useMemo(() => summarizeIntervals(comparisonIntervals), [comparisonIntervals]);
+
+  const timelineIntervals = useMemo(
+    () =>
+      currentIntervals
+        .filter((interval) => interval.machineId === primaryMachineId)
+        .sort((left, right) => new Date(left.startAt).getTime() - new Date(right.startAt).getTime()),
+    [currentIntervals, primaryMachineId]
+  );
+
+  const drilldownFilters = useMemo(
+    () => ({
+      businessState: businessStateFilter,
+      eventType: eventTypeFilter,
+      statusDescription: statusDescriptionFilter,
+      operationCode: operationCodeFilter,
+      jobCode: jobCodeFilter
+    }),
+    [businessStateFilter, eventTypeFilter, statusDescriptionFilter, operationCodeFilter, jobCodeFilter]
+  );
+
+  const drilldownIntervals = useMemo(
+    () => currentIntervals.filter((interval) => matchesFilters(interval, drilldownFilters)),
+    [currentIntervals, drilldownFilters]
+  );
+
+  const lossIntervals = useMemo(() => {
+    if (businessStateFilter === "all") {
+      return drilldownIntervals.filter((interval) => interval.businessState !== "good");
+    }
+
+    return drilldownIntervals.filter((interval) => interval.businessState === businessStateFilter);
+  }, [drilldownIntervals, businessStateFilter]);
+
+  const lossRows = useMemo(
+    () =>
+      aggregateIntervals(lossIntervals, (row) => row.statusDescription, (interval, key) => key).map((row) => ({
+        ...row,
+        label: row.key
+      })),
+    [lossIntervals]
+  );
+  const focusedLossTotalMinutes = useMemo(
+    () => drilldownIntervals.reduce((acc, interval) => acc + interval.minutes, 0),
+    [drilldownIntervals]
+  );
+
+  const pressRows = useMemo(
+    () =>
+      aggregateIntervals(currentIntervals, (row) => row.machineId, (interval, key) => formatMachineDisplayName(key)).map((row) => ({
+        ...row,
+        label: formatMachineDisplayName(row.key)
+      })),
+    [currentIntervals]
+  );
+
+  const dayRows = useMemo(
+    () =>
+      aggregateIntervals(currentIntervals, (row) => row.dayKey, (interval, key) => key).map((row) => ({
+        ...row,
+        label: formatDay(row.key)
+      })),
+    [currentIntervals]
+  );
+
+  const activeDrillRows = useMemo(() => {
+    const source =
+      activeTab === "status"
+        ? aggregateIntervals(drilldownIntervals, (row) => row.statusDescription, (interval, key) => key)
+        : activeTab === "operator"
+          ? aggregateIntervals(drilldownIntervals, (row) => row.operationCode, (interval, key) => key)
+          : activeTab === "job"
+            ? aggregateIntervals(drilldownIntervals, (row) => row.jobCode, (interval, key) => key)
+            : activeTab === "press"
+              ? aggregateIntervals(drilldownIntervals, (row) => row.machineId, (interval, key) => formatMachineDisplayName(key))
+              : aggregateIntervals(drilldownIntervals, (row) => row.dayKey, (interval, key) => key);
+
+    return source.map((row) => ({
+      ...row,
+      label:
+        activeTab === "press"
+          ? formatMachineDisplayName(row.key)
+          : activeTab === "day"
+            ? formatDay(row.key)
+            : row.label || row.key
+    }));
+  }, [activeTab, drilldownIntervals]);
+
+  const sortedComparisonRows = useMemo(() => {
+    const rows = [...pressRows].sort((left, right) => left.goodPercent - right.goodPercent || right.totalMinutes - left.totalMinutes);
+
+    if (comparisonSort.key !== "goodPercent") {
+      rows.sort((left, right) => {
+        const leftValue = left[comparisonSort.key];
+        const rightValue = right[comparisonSort.key];
+        const leftComparable = typeof leftValue === "string" ? leftValue : Number(leftValue || 0);
+        const rightComparable = typeof rightValue === "string" ? rightValue : Number(rightValue || 0);
+
+        if (leftComparable < rightComparable) {
+          return comparisonSort.direction === "asc" ? -1 : 1;
+        }
+
+        if (leftComparable > rightComparable) {
+          return comparisonSort.direction === "asc" ? 1 : -1;
+        }
+
+        return left.goodPercent - right.goodPercent || right.totalMinutes - left.totalMinutes;
+      });
+    } else if (comparisonSort.direction === "desc") {
+      rows.reverse();
+    }
+
+    return rows.map((row) => ({
+      ...row,
+      label: formatMachineDisplayName(row.key)
+    }));
+  }, [pressRows, comparisonSort]);
+
+  const sortedDrillRows = useMemo(() => {
+    const rows = [...activeDrillRows];
+    rows.sort((left, right) => {
+      const leftValue = left[drillSort.key];
+      const rightValue = right[drillSort.key];
+
+      const leftComparable =
+        typeof leftValue === "string" ? leftValue.toLowerCase() : Number(leftValue || 0);
+      const rightComparable =
+        typeof rightValue === "string" ? rightValue.toLowerCase() : Number(rightValue || 0);
+
+      if (leftComparable < rightComparable) {
+        return drillSort.direction === "asc" ? -1 : 1;
+      }
+
+      if (leftComparable > rightComparable) {
+        return drillSort.direction === "asc" ? 1 : -1;
+      }
+
+      return right.totalMinutes - left.totalMinutes;
+    });
+
+    return rows;
+  }, [activeDrillRows, drillSort]);
+
+  const worstPress = sortedComparisonRows[0] || null;
+  const bestPress = sortedComparisonRows[sortedComparisonRows.length - 1] || null;
+  const biggestLoss = lossRows[0] || null;
+
+  function applyPreset(preset) {
+    const nextRange = getRangePreset(preset);
+    setDraftSince(toDateTimeLocalValue(nextRange.since));
+    setDraftUntil(toDateTimeLocalValue(nextRange.until));
+    setAppliedRange({
+      since: nextRange.since.toISOString(),
+      until: nextRange.until.toISOString()
     });
   }
 
-  function handleResetWindow() {
-    const sinceValue = toDateTimeLocalValue(new Date(Date.now() - 24 * 60 * 60 * 1000));
-    const untilValue = toDateTimeLocalValue(new Date());
+  function handleApplyRange() {
+    const since = fromDateTimeLocalValue(draftSince);
+    const until = fromDateTimeLocalValue(draftUntil);
 
-    setDraftSince(sinceValue);
-    setDraftUntil(untilValue);
+    if (!since || !until) {
+      return;
+    }
+
+    setAppliedRange({ since, until });
   }
 
-  const selectedMachineCount = draftMachineIds.length;
-  const trackedHours = dashboard.summary.trackedMinutes / 60;
+  function handleClearFilters() {
+    const nextRange = getRangePreset("today");
+    setDraftSince(toDateTimeLocalValue(nextRange.since));
+    setDraftUntil(toDateTimeLocalValue(nextRange.until));
+    setAppliedRange({
+      since: nextRange.since.toISOString(),
+      until: nextRange.until.toISOString()
+    });
+    setSelectedMachineIds(["205"]);
+    setPrimaryMachineId("205");
+    setBusinessStateFilter("all");
+    setEventTypeFilter("all");
+    setStatusDescriptionFilter("all");
+    setOperationCodeFilter("all");
+    setJobCodeFilter("all");
+    setActiveTab("status");
+    setPressToAdd("");
+  }
+
+  function handleRefresh() {
+    setRefreshNonce((current) => current + 1);
+  }
+
+  function toggleMachine(machineId) {
+    setSelectedMachineIds((current) => {
+      const exists = current.includes(machineId);
+      const next = exists ? current.filter((value) => value !== machineId) : [...current, machineId];
+
+      if (next.length === 0) {
+        return current;
+      }
+
+      if (!next.includes(primaryMachineId)) {
+        setPrimaryMachineId(next[0]);
+      }
+
+      return next;
+    });
+  }
+
+  function addMachine(machineId) {
+    if (!machineId || selectedMachineIds.includes(machineId)) {
+      return;
+    }
+
+    setSelectedMachineIds((current) => [...current, machineId]);
+    setPrimaryMachineId((current) => (current && selectedMachineIds.includes(current) ? current : machineId));
+    setPressToAdd("");
+  }
+
+  function sortRows(key, currentSort, setSort) {
+    setSort((previous) => {
+      if (previous.key === key) {
+        return {
+          key,
+          direction: previous.direction === "asc" ? "desc" : "asc"
+        };
+      }
+
+      return {
+        key,
+        direction:
+          key === "label" || key === "topLossReason" ? "asc" : "desc"
+      };
+    });
+  }
+
+  function selectTimelineInterval(interval) {
+    setBusinessStateFilter(interval.businessState);
+    setStatusDescriptionFilter(interval.statusDescription);
+    setEventTypeFilter(interval.eventType || "all");
+    setOperationCodeFilter("all");
+    setJobCodeFilter("all");
+    setActiveTab("status");
+  }
+
+  function setFocusState(state) {
+    setBusinessStateFilter(state);
+    setActiveTab("status");
+  }
+
+  function focusPress(machineId) {
+    setPrimaryMachineId(machineId);
+    setActiveTab("press");
+  }
+
+  const kpiChange = canCompare
+    ? {
+        good: getDeltaLabel(currentSummary.goodPercent, previousSummary.goodPercent, "percent"),
+        setup: getDeltaLabel(currentSummary.setupPercent, previousSummary.setupPercent, "percent"),
+        downtime: getDeltaLabel(currentSummary.downtimePercent, previousSummary.downtimePercent, "percent"),
+        hours: getDeltaLabel(currentSummary.totalObservedHours, previousSummary.totalObservedHours, "hours")
+      }
+    : null;
+
+  const isLoading = analysis.isLoading && currentIntervals.length === 0;
 
   return (
-    <section className="analysis-page">
-      <section className="panel analysis-hero">
-        <div className="analysis-hero-copy">
-          <p className="eyebrow">Machine status time</p>
-          <h3>Compare presses by exact status time.</h3>
-          <p className="hero-copy">
-            Pick a time range, then compare one or more presses side by side. The page
-            calculates how long each machine spent in each status description from the
-            stored history intervals.
-          </p>
+    <section className="status-analysis-page">
+      <section className="panel analysis-toolbar">
+        <div className="analysis-toolbar-top">
+          <div>
+            <p className="analysis-eyebrow">Industrial analysis</p>
+            <h3>Where did we lose press time, and why?</h3>
+            <p className="analysis-helper">
+              Built from `machine_status_history` with durations estimated from consecutive polls.
+            </p>
+          </div>
+          <div className="analysis-toolbar-meta">
+            <span>Last refreshed</span>
+            <strong>{analysis.lastLoadedLabel}</strong>
+            <small>{formatRangeLabel(analysis.since, analysis.until)}</small>
+          </div>
         </div>
 
-        <div className="analysis-controls">
-          <div className="analysis-select-block">
-            <span className="label">Filters</span>
-            <div className="time-range-grid">
-              <label className="field-group">
+        <div className="analysis-toolbar-grid">
+          <div className="analysis-toolbar-card">
+            <div className="analysis-toolbar-card-head">
+              <p className="analysis-eyebrow">Date range</p>
+              <button type="button" className="analysis-text-button" onClick={handleRefresh}>
+                Refresh
+              </button>
+            </div>
+            <div className="analysis-date-grid">
+              <label className="analysis-field">
                 <span>From</span>
                 <input
                   type="datetime-local"
-                  className="select-field"
+                  className="analysis-input"
                   value={draftSince}
                   onChange={(event) => setDraftSince(event.target.value)}
                 />
               </label>
-              <label className="field-group">
+              <label className="analysis-field">
                 <span>To</span>
                 <input
                   type="datetime-local"
-                  className="select-field"
+                  className="analysis-input"
                   value={draftUntil}
                   onChange={(event) => setDraftUntil(event.target.value)}
                 />
               </label>
             </div>
-            <div className="analysis-control-group">
-              <div className="analysis-panel-header">
-                <div>
-                  <p className="eyebrow">Compare presses</p>
-                  <h3>Select machines to include</h3>
-                </div>
-                <div className="analysis-panel-note">
-                  {selectedMachineCount} selected
-                </div>
-              </div>
-
-              <div className="filter-actions">
-                <button type="button" className="window-chip" onClick={handleResetWindow}>
-                  Last 24h
+            <div className="analysis-quick-ranges">
+              {QUICK_RANGES.map((preset) => (
+                <button key={preset.value} type="button" className="analysis-chip" onClick={() => applyPreset(preset.value)}>
+                  {preset.label}
                 </button>
-                <button type="button" className="window-chip" onClick={handleSelectAll}>
-                  Select all
-                </button>
-                <button type="button" className="window-chip" onClick={handleClearAll}>
-                  Clear
-                </button>
-                <button type="button" className="window-chip window-chip-active" onClick={handleApplyFilters}>
-                  Apply filters
-                </button>
-              </div>
-
-              <div className="machine-picker">
-                {availableMachines.map((machineId) => {
-                  const isSelected = draftMachineIds.includes(machineId);
-                  return (
-                    <button
-                      key={machineId}
-                      type="button"
-                      className={isSelected ? "machine-chip machine-chip-active" : "machine-chip"}
-                      onClick={() => handleToggleMachine(machineId)}
-                    >
-                      <strong>{formatMachineDisplayName(machineId)}</strong>
-                      <span>{machineId}</span>
-                    </button>
-                  );
-                })}
-                {!dashboard.isLoading && availableMachines.length === 0 ? (
-                  <p className="analysis-empty">No presses were returned from machine_status_history.</p>
-                ) : null}
-              </div>
+              ))}
+              <button type="button" className="analysis-chip analysis-chip-primary" onClick={handleApplyRange}>
+                Apply Range
+              </button>
             </div>
           </div>
 
-          <div className="analysis-meta">
-            <p className="label">Loaded</p>
-            <p className="value-emphasis">{dashboard.lastLoadedLabel}</p>
-            <p className="analysis-meta-copy">{latestRangeLabel}</p>
+          <div className="analysis-toolbar-card">
+            <div className="analysis-toolbar-card-head">
+              <p className="analysis-eyebrow">Selected presses</p>
+              <button type="button" className="analysis-text-button" onClick={handleClearFilters}>
+                Clear filters
+              </button>
+            </div>
+            <div className="analysis-selected-presses">
+              {selectedMachineIds.map((machineId) => (
+                <button
+                  key={machineId}
+                  type="button"
+                  className={`analysis-selected-chip ${primaryMachineId === machineId ? "analysis-selected-chip-primary" : ""}`}
+                  onClick={() => toggleMachine(machineId)}
+                  title="Click to remove"
+                >
+                  <strong>{formatMachineDisplayName(machineId)}</strong>
+                  <span>{machineId}</span>
+                </button>
+              ))}
+            </div>
+            <div className="analysis-add-press-row">
+              <label className="analysis-field">
+                <span>Add Press</span>
+                <select
+                  className="analysis-input"
+                  value={pressToAdd}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setPressToAdd(value);
+                    if (value) {
+                      addMachine(value);
+                    }
+                  }}
+                  disabled={selectedMachineOptions.length === 0}
+                >
+                  <option value="">Choose a press</option>
+                  {selectedMachineOptions.map((machineId) => (
+                    <option key={machineId} value={machineId}>
+                      {formatMachineDisplayName(machineId)} ({machineId})
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="analysis-field">
+                <span>Business state</span>
+                <div className="analysis-state-chips">
+                  {BUSINESS_STATE_OPTIONS.map((option) => (
+                    <StateChip
+                      key={option.value}
+                      label={option.label}
+                      value={option.value}
+                      active={businessStateFilter === option.value}
+                      onClick={() => setFocusState(option.value)}
+                    />
+                  ))}
+                </div>
+              </label>
+            </div>
           </div>
         </div>
       </section>
 
-      <section className="summary-grid">
-        <AnalysisMetric
-          label="Presses"
-          value={dashboard.summary.machineCount}
-          detail="Machines with tracked intervals"
+      <section className="kpi-grid">
+        <KpiCard
+          label="Good Time %"
+          value={formatPercent(currentSummary.goodMinutes, currentSummary.totalObservedMinutes)}
+          subtitle={formatDurationMinutes(currentSummary.goodMinutes)}
+          change={kpiChange?.good ? { label: `vs previous ${kpiChange.good}`, direction: currentSummary.goodPercent >= previousSummary.goodPercent ? "positive" : "negative" } : null}
+          tone="good"
+          active={businessStateFilter === "good"}
+          onClick={() => setFocusState("good")}
         />
-        <AnalysisMetric
-          label="Tracked time"
-          value={formatDurationMinutes(dashboard.summary.trackedMinutes)}
-          detail={trackedHours ? `${trackedHours.toFixed(1)} hours` : "Estimated from history rows"}
+        <KpiCard
+          label="Setup Time %"
+          value={formatPercent(currentSummary.setupMinutes, currentSummary.totalObservedMinutes)}
+          subtitle={formatDurationMinutes(currentSummary.setupMinutes)}
+          change={kpiChange?.setup ? { label: `vs previous ${kpiChange.setup}`, direction: currentSummary.setupPercent <= previousSummary.setupPercent ? "positive" : "negative" } : null}
+          tone="setup"
+          active={businessStateFilter === "setup"}
+          onClick={() => setFocusState("setup")}
         />
-        <AnalysisMetric
-          label="Statuses"
-          value={dashboard.summary.statusCount}
-          detail="Distinct status descriptions"
+        <KpiCard
+          label="Downtime %"
+          value={formatPercent(currentSummary.downtimeMinutes, currentSummary.totalObservedMinutes)}
+          subtitle={formatDurationMinutes(currentSummary.downtimeMinutes)}
+          change={kpiChange?.downtime ? { label: `vs previous ${kpiChange.downtime}`, direction: currentSummary.downtimePercent <= previousSummary.downtimePercent ? "positive" : "negative" } : null}
+          tone="downtime"
+          active={businessStateFilter === "downtime"}
+          onClick={() => setFocusState("downtime")}
         />
-        <AnalysisMetric
-          label="Top status"
-          value={topStatus ? topStatus.statusDescription : "--"}
-          detail={
-            topStatus
-              ? `${formatDurationMinutes(topStatus.trackedMinutes)} · ${formatPercent(topStatus.trackedMinutes, dashboard.summary.trackedMinutes)}`
-              : "No data yet"
-          }
+        <KpiCard
+          label="Total Observed Hours"
+          value={formatHours(currentSummary.totalObservedMinutes)}
+          subtitle={`${currentSummary.sampleCount} samples`}
+          change={kpiChange?.hours ? { label: `vs previous ${kpiChange.hours}`, direction: "neutral" } : null}
+          tone="neutral"
+          onClick={handleRefresh}
+        />
+        <KpiCard
+          label="Biggest Loss"
+          value={currentSummary.biggestLossReason}
+          subtitle={formatDurationMinutes(currentSummary.biggestLossMinutes)}
+          change={canCompare && previousSummary.biggestLossReason !== currentSummary.biggestLossReason ? { label: `previous: ${previousSummary.biggestLossReason}`, direction: "neutral" } : null}
+          tone="neutral"
+          onClick={() => {
+            setActiveTab("status");
+            setBusinessStateFilter("downtime");
+            setStatusDescriptionFilter(currentSummary.biggestLossReason);
+          }}
+        />
+        <KpiCard
+          label="Worst Press"
+          value={worstPress ? formatMachineDisplayName(worstPress.key) : "--"}
+          subtitle={worstPress ? "Lowest Good Time %" : "No comparison data"}
+          change={canCompare && previousSummary.worstSelectedPress !== currentSummary.worstSelectedPress ? { label: `previous: ${previousSummary.worstSelectedPress}`, direction: "neutral" } : null}
+          tone="downtime"
+          onClick={() => worstPress && focusPress(worstPress.key)}
+        />
+        <KpiCard
+          label="Best Press"
+          value={bestPress ? formatMachineDisplayName(bestPress.key) : "--"}
+          subtitle={bestPress ? "Highest Good Time %" : "No comparison data"}
+          change={canCompare && previousSummary.bestSelectedPress !== currentSummary.bestSelectedPress ? { label: `previous: ${previousSummary.bestSelectedPress}`, direction: "neutral" } : null}
+          tone="good"
+          onClick={() => bestPress && focusPress(bestPress.key)}
         />
       </section>
 
-      {dashboard.error ? (
-        <section className="panel state-panel error-panel">
-          <p className="eyebrow">Fetch Error</p>
-          <h3>Machine status analysis is unavailable</h3>
-          <p>{dashboard.error}</p>
+      {analysis.error ? (
+        <section className="panel status-analysis-panel analysis-error-banner">
+          <SectionHeader
+            eyebrow="Analysis source"
+            title="Unable to load analysis data"
+            helper={analysis.error}
+          />
+          <p className="analysis-helper">
+            If PostgreSQL lives in another application, this page needs that source exposed through an API or a reachable database connection.
+          </p>
         </section>
       ) : null}
 
-      <section className="analysis-grid">
-        <article className="panel analysis-panel">
-          <div className="analysis-panel-header">
-            <div>
-              <p className="eyebrow">All selected presses</p>
-              <h3>Time by status description</h3>
-            </div>
-            <p className="analysis-panel-note">{dashboard.statusTotals.length} statuses</p>
-          </div>
+      <section className="status-analysis-main-grid">
+        <article className="panel status-analysis-panel">
+          <SectionHeader
+            eyebrow="Timeline"
+            title={formatMachineDisplayName(primaryMachineId)}
+            helper="Click a segment to narrow the drilldown to a status, operator, or job."
+            meta={<span>{timelineIntervals.length} segments</span>}
+          />
+          {isLoading ? <LoadingSkeleton /> : <Timeline
+            intervals={timelineIntervals}
+            selectedStatusDescription={statusDescriptionFilter}
+            selectedBusinessState={businessStateFilter}
+            onSelectSegment={selectTimelineInterval}
+          />}
+        </article>
 
-          {dashboard.statusTotals.length > 0 ? (
-            <>
-              <StatusStack
-                statusTotals={dashboard.statusTotals}
-                totalMinutes={dashboard.summary.trackedMinutes}
-              />
-              <StatusLegend
-                statusTotals={dashboard.statusTotals}
-                totalMinutes={dashboard.summary.trackedMinutes}
-              />
-            </>
+        <article className="panel status-analysis-panel">
+          <SectionHeader
+            eyebrow="Loss breakdown"
+            title={`${getBusinessStateLabel(businessStateFilter)} causes`}
+            helper="Use this to answer where time disappeared and what the dominant cause was."
+            meta={<span>{lossRows.length} reasons</span>}
+          />
+          {lossRows.length ? (
+            <div className="loss-chart">
+              {lossRows.slice(0, 8).map((row) => (
+                <button
+                  key={row.key}
+                  type="button"
+                  className="loss-row"
+                  onClick={() => {
+                    setActiveTab("status");
+                    setStatusDescriptionFilter(row.key);
+                  }}
+                >
+                  <div className="loss-row-head">
+                    <strong>{row.label}</strong>
+                    <span>{formatDurationMinutes(row.totalMinutes)}</span>
+                  </div>
+                  <div className="percent-meter">
+                    <span className="percent-fill percent-fill-downtime" style={{ width: percentageWidth(row.totalMinutes, currentSummary.totalObservedMinutes || row.totalMinutes) }} />
+                  </div>
+                  <div className="loss-row-foot">
+                    <span>{formatPercent(row.totalMinutes, currentSummary.totalObservedMinutes)}</span>
+                    <span>{formatPercent(row.totalMinutes, focusedLossTotalMinutes)} of focus</span>
+                  </div>
+                </button>
+              ))}
+            </div>
           ) : (
-            <p className="analysis-empty">No status durations found in the selected window.</p>
+            <EmptyState
+              title="No loss rows for this selection"
+              description="Change the business state or selected presses to surface the dominant loss reasons."
+            />
           )}
         </article>
+      </section>
 
-        <article className="panel analysis-panel">
-          <div className="analysis-panel-header">
-            <div>
-              <p className="eyebrow">Window</p>
-              <h3>Recent status intervals</h3>
-            </div>
-            <p className="analysis-panel-note">{dashboard.recentIntervals.length} rows</p>
-          </div>
+      <section className="panel status-analysis-panel">
+        <SectionHeader
+          eyebrow="Press comparison"
+          title="Lowest Good Time % first"
+          helper="A compact comparison to see which press should be inspected next."
+          meta={<span>{sortedComparisonRows.length} presses</span>}
+        />
+        <MetricTable
+          rows={sortedComparisonRows}
+          sortKey={comparisonSort}
+          onSortChange={(key) => sortRows(key, comparisonSort, setComparisonSort)}
+          highlightKey={worstPress?.key}
+          columns={[
+            { key: "label", label: "Press", sortable: true },
+            { key: "goodMinutes", label: "Good", sortable: true, numeric: true },
+            { key: "setupMinutes", label: "Setup", sortable: true, numeric: true },
+            { key: "downtimeMinutes", label: "Downtime", sortable: true, numeric: true },
+            { key: "totalMinutes", label: "Total Hours", sortable: true, numeric: true },
+            { key: "topLossReason", label: "Top Loss", sortable: true },
+            { key: "topLossMinutes", label: "Loss Minutes", sortable: true, numeric: true },
+            { key: "mix", label: "Mix", sortable: false }
+          ]}
+          emptyLabel="No presses match the current selection."
+        />
+      </section>
 
-          <div className="interval-list">
-            {dashboard.recentIntervals.map((interval) => (
-              <div key={`${interval.machineId}-${interval.startAt}-${interval.endAt}`} className="interval-row">
-                <div>
-                  <strong>{formatMachineDisplayName(interval.machineId)}</strong>
-                  <p>{interval.statusDescription || "--"}</p>
-                </div>
-                <div>
-                  <strong>{formatDurationMinutes(interval.minutes)}</strong>
-                  <p>
-                    {formatTimestamp(interval.startAt)} - {formatTimestamp(interval.endAt)}
-                  </p>
-                </div>
-              </div>
+      <section className="status-analysis-lower-grid">
+        <article className="panel status-analysis-panel">
+          <SectionHeader
+            eyebrow="Day-by-day"
+            title="Which day was better?"
+            helper="Use this to spot whether one day underperformed the rest."
+            meta={<span>{dayRows.length} days</span>}
+          />
+        <MetricTable
+          rows={dayRows}
+          sortKey={daySort}
+          onSortChange={(key) => sortRows(key, daySort, setDaySort)}
+          highlightKey={null}
+          columns={[
+              { key: "label", label: "Day", sortable: true },
+              { key: "goodMinutes", label: "Good", sortable: true, numeric: true },
+              { key: "setupMinutes", label: "Setup", sortable: true, numeric: true },
+              { key: "downtimeMinutes", label: "Downtime", sortable: true, numeric: true },
+              { key: "totalMinutes", label: "Total Hours", sortable: true, numeric: true },
+              { key: "topLossReason", label: "Biggest Loss", sortable: true },
+              { key: "topLossMinutes", label: "Loss Minutes", sortable: true, numeric: true },
+              { key: "mix", label: "Trend", sortable: false }
+            ]}
+            emptyLabel="No day breakdown available for the selected range."
+          />
+        </article>
+
+        <article className="panel status-analysis-panel drilldown-panel">
+          <SectionHeader
+            eyebrow="Drilldowns"
+            title="Inspect the loss from different angles"
+            helper={DRILL_TABS.find((tab) => tab.value === activeTab)?.helper}
+            meta={<span>{sortedDrillRows.length} rows</span>}
+          />
+
+          <div className="drilldown-tabs">
+            {DRILL_TABS.map((tab) => (
+              <button
+                key={tab.value}
+                type="button"
+                className={activeTab === tab.value ? "drilldown-tab drilldown-tab-active" : "drilldown-tab"}
+                onClick={() => setActiveTab(tab.value)}
+              >
+                {tab.label}
+              </button>
             ))}
-            {!dashboard.recentIntervals.length && !dashboard.isLoading ? (
-              <p className="analysis-empty">No intervals found in the selected window.</p>
-            ) : null}
           </div>
+
+          <div className="drilldown-controls">
+            <label className="analysis-field">
+              <span>Business state</span>
+              <select className="analysis-input" value={businessStateFilter} onChange={(event) => setBusinessStateFilter(event.target.value)}>
+                {BUSINESS_STATE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="analysis-field">
+              <span>Event type</span>
+              <select className="analysis-input" value={eventTypeFilter} onChange={(event) => setEventTypeFilter(event.target.value)}>
+                <option value="all">All</option>
+                {analysis.filter_options.eventTypes.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="analysis-field">
+              <span>Status description</span>
+              <select className="analysis-input" value={statusDescriptionFilter} onChange={(event) => setStatusDescriptionFilter(event.target.value)}>
+                <option value="all">All</option>
+                {analysis.filter_options.statusDescriptions.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="analysis-field">
+              <span>Operator</span>
+              <select className="analysis-input" value={operationCodeFilter} onChange={(event) => setOperationCodeFilter(event.target.value)}>
+                <option value="all">All</option>
+                {analysis.filter_options.operationCodes.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="analysis-field">
+              <span>Job</span>
+              <select className="analysis-input" value={jobCodeFilter} onChange={(event) => setJobCodeFilter(event.target.value)}>
+                <option value="all">All</option>
+                {analysis.filter_options.jobCodes.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="drilldown-summary-grid">
+            <div className="drilldown-summary-card">
+              <span>Good %</span>
+              <strong>{formatPercent(currentSummary.goodMinutes, currentSummary.totalObservedMinutes)}</strong>
+            </div>
+            <div className="drilldown-summary-card">
+              <span>Setup %</span>
+              <strong>{formatPercent(currentSummary.setupMinutes, currentSummary.totalObservedMinutes)}</strong>
+            </div>
+            <div className="drilldown-summary-card">
+              <span>Downtime %</span>
+              <strong>{formatPercent(currentSummary.downtimeMinutes, currentSummary.totalObservedMinutes)}</strong>
+            </div>
+            <div className="drilldown-summary-card">
+              <span>Total hours</span>
+              <strong>{formatHours(currentSummary.totalObservedMinutes)}</strong>
+            </div>
+            <div className="drilldown-summary-card">
+              <span>Top loss reason</span>
+              <strong>{currentSummary.biggestLossReason}</strong>
+            </div>
+            <div className="drilldown-summary-card">
+              <span>Sample size</span>
+              <strong>{currentSummary.sampleCount} samples</strong>
+            </div>
+          </div>
+
+          <MetricTable
+            rows={sortedDrillRows}
+            sortKey={drillSort}
+            onSortChange={(key) => sortRows(key, drillSort, setDrillSort)}
+            highlightKey={activeTab === "press" && primaryMachineId ? primaryMachineId : null}
+            kind="drilldown"
+            columns={[
+              { key: "label", label: activeTab === "day" ? "Day" : "Reason / Press", sortable: true },
+              { key: "goodMinutes", label: "Good", sortable: true, numeric: true },
+              { key: "setupMinutes", label: "Setup", sortable: true, numeric: true },
+              { key: "downtimeMinutes", label: "Downtime", sortable: true, numeric: true },
+              { key: "totalMinutes", label: "Total Hours", sortable: true, numeric: true },
+              { key: "topLossReason", label: "Top Loss", sortable: true },
+              { key: "topLossMinutes", label: "Loss Minutes", sortable: true, numeric: true },
+              { key: "mix", label: "Mix", sortable: false },
+              { key: "sampleCount", label: "Samples", sortable: true, numeric: true }
+            ]}
+            emptyLabel="No rows match the current drilldown filters."
+          />
         </article>
       </section>
 
-      <section className="analysis-machine-grid">
-        {dashboard.machineBreakdown.map((machine) => (
-          <MachineCard key={machine.machineId} machine={machine} />
-        ))}
-        {!dashboard.machineBreakdown.length && !dashboard.isLoading ? (
-          <section className="panel state-panel">
-            <p className="eyebrow">No Data</p>
-            <h3>No machine history was available for the selected window</h3>
-          </section>
-        ) : null}
-      </section>
-
-      <section className="analysis-debug-grid">
-        <DebugCard
-          title="Current status feed"
-          data={feedError ? { error: feedError } : feedDebug}
-          emptyLabel="No current-status debug data yet."
-        />
-        <DebugCard
-          title="History analysis"
-          data={dashboard.debug}
-          emptyLabel="No analysis debug data yet."
-        />
-      </section>
+      <DebugPanel currentDebug={analysis.debug} previousDebug={previousAnalysis.debug} />
     </section>
   );
 }

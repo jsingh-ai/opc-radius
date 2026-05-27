@@ -4,6 +4,22 @@ import { formatTimestampLabel } from "../utils/formatters";
 
 const REFRESH_INTERVAL_MS = 60000;
 
+const EMPTY_SUMMARY = {
+  goodMinutes: 0,
+  setupMinutes: 0,
+  downtimeMinutes: 0,
+  totalObservedMinutes: 0,
+  totalObservedHours: 0,
+  goodPercent: 0,
+  setupPercent: 0,
+  downtimePercent: 0,
+  biggestLossReason: "--",
+  worstSelectedPress: "--",
+  bestSelectedPress: "--",
+  sampleCount: 0,
+  latestIntervalAt: null
+};
+
 export function useMachineStatusAnalysis(params) {
   const [data, setData] = useState({
     databaseConfigured: false,
@@ -11,16 +27,27 @@ export function useMachineStatusAnalysis(params) {
     windowHours: params?.windowHours ?? 24,
     since: null,
     until: null,
-    summary: {
-      machineCount: 0,
-      trackedMinutes: 0,
-      statusCount: 0,
-      latestIntervalAt: null
-    },
     availableMachines: [],
-    statusTotals: [],
-    machineBreakdown: [],
-    recentIntervals: [],
+    primaryMachineId: null,
+    intervals: [],
+    summary: EMPTY_SUMMARY,
+    selected_press_timeline: {
+      machineId: null,
+      displayName: "",
+      intervals: []
+    },
+    press_comparison: [],
+    day_breakdown: [],
+    status_breakdown: [],
+    operator_breakdown: [],
+    job_breakdown: [],
+    filter_options: {
+      machineIds: [],
+      eventTypes: [],
+      statusDescriptions: [],
+      operationCodes: [],
+      jobCodes: []
+    },
     debug: null
   });
   const [isLoading, setIsLoading] = useState(true);
