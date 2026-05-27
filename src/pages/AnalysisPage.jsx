@@ -328,6 +328,32 @@ function formatRangeLabel(since, until) {
   return `${formatTimestamp(since)} to ${formatTimestamp(until)}`;
 }
 
+function formatRangeChipLabel(since, until) {
+  if (!since || !until) {
+    return "Today";
+  }
+
+  const sinceDate = new Date(since);
+  const untilDate = new Date(until);
+  if (Number.isNaN(sinceDate.getTime()) || Number.isNaN(untilDate.getTime())) {
+    return "Today";
+  }
+
+  const sameDay =
+    sinceDate.getFullYear() === untilDate.getFullYear() &&
+    sinceDate.getMonth() === untilDate.getMonth() &&
+    sinceDate.getDate() === untilDate.getDate();
+
+  if (sameDay) {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric"
+    }).format(sinceDate);
+  }
+
+  return `${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(sinceDate)} - ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(untilDate)}`;
+}
+
 function compareRange(range) {
   if (!range?.since || !range?.until) {
     return null;
@@ -432,6 +458,136 @@ function buildFocusRecommendation(intervals) {
     mainJob,
     statusDescription: topReason?.statusDescription || null,
     businessState
+  };
+}
+
+function buildIntervalAnalysis(intervals) {
+  const pressBuckets = new Map();
+  const dayBuckets = new Map();
+  const statusBuckets = new Map();
+  const operatorBuckets = new Map();
+  const jobBuckets = new Map();
+
+  const totals = {
+    goodMinutes: 0,
+    setupMinutes: 0,
+    downtimeMinutes: 0
+  };
+
+  for (const interval of intervals) {
+    const bucketKey = interval.machineId;
+    const dayKey = interval.dayKey;
+    const statusKey = interval.statusDescription || "Unknown";
+    const operatorKey = interval.operationCode || "Unknown Operator";
+    const jobKey = interval.jobCode || "Non Productive / Unknown Job";
+
+    if (interval.businessState === "good") {
+      totals.goodMinutes += interval.minutes;
+    } else if (interval.businessState === "setup") {
+      totals.setupMinutes += interval.minutes;
+    } else {
+      totals.downtimeMinutes += interval.minutes;
+    }
+
+    function touchBucket(map, key, label) {
+      if (key === null || key === undefined || key === "") {
+        return null;
+      }
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          label,
+          sampleCount: 0,
+          goodMinutes: 0,
+          setupMinutes: 0,
+          downtimeMinutes: 0,
+          totalMinutes: 0,
+          statusBuckets: new Map()
+        });
+      }
+
+      const bucket = map.get(key);
+      bucket.sampleCount += 1;
+      bucket.totalMinutes += interval.minutes;
+
+      if (interval.businessState === "good") {
+        bucket.goodMinutes += interval.minutes;
+      } else if (interval.businessState === "setup") {
+        bucket.setupMinutes += interval.minutes;
+      } else {
+        bucket.downtimeMinutes += interval.minutes;
+      }
+
+      bucket.statusBuckets.set(statusKey, (bucket.statusBuckets.get(statusKey) || 0) + interval.minutes);
+      return bucket;
+    }
+
+    touchBucket(pressBuckets, bucketKey, formatMachineDisplayName(bucketKey));
+    touchBucket(dayBuckets, dayKey, dayKey);
+    touchBucket(statusBuckets, statusKey, statusKey);
+    touchBucket(operatorBuckets, operatorKey, operatorKey);
+    touchBucket(jobBuckets, jobKey, jobKey);
+  }
+
+  function finalizeBuckets(map, kind) {
+    return Array.from(map.values())
+      .map((bucket) => {
+        const statusRows = Array.from(bucket.statusBuckets.entries())
+          .map(([statusDescription, minutes]) => ({ statusDescription, minutes }))
+          .sort((left, right) => right.minutes - left.minutes || left.statusDescription.localeCompare(right.statusDescription));
+
+        const topLoss = statusRows.find((row) => row.statusDescription !== "Run Production") || statusRows[0] || null;
+        const totalMinutes = bucket.totalMinutes;
+
+        return {
+          key: bucket.key,
+          label:
+            kind === "press"
+              ? formatMachineDisplayName(bucket.key)
+              : kind === "day"
+                ? formatDay(bucket.key)
+                : bucket.label,
+          sampleCount: bucket.sampleCount,
+          sampleHours: bucket.sampleCount / 60,
+          goodMinutes: bucket.goodMinutes,
+          setupMinutes: bucket.setupMinutes,
+          downtimeMinutes: bucket.downtimeMinutes,
+          totalMinutes,
+          goodPercent: totalMinutes > 0 ? bucket.goodMinutes / totalMinutes : 0,
+          setupPercent: totalMinutes > 0 ? bucket.setupMinutes / totalMinutes : 0,
+          downtimePercent: totalMinutes > 0 ? bucket.downtimeMinutes / totalMinutes : 0,
+          topLossReason: topLoss ? topLoss.statusDescription : "--",
+          topLossMinutes: topLoss ? topLoss.minutes : 0,
+          statusRows
+        };
+      })
+      .sort((left, right) => right.totalMinutes - left.totalMinutes || String(left.label).localeCompare(String(right.label)));
+  }
+
+  const summaryTotals = totals.goodMinutes + totals.setupMinutes + totals.downtimeMinutes;
+  const summaryLossRows = finalizeBuckets(statusBuckets, "status").filter((row) => row.key !== "Run Production");
+  const biggestLossReason = summaryLossRows[0] || null;
+
+  return {
+    summary: {
+      goodMinutes: totals.goodMinutes,
+      setupMinutes: totals.setupMinutes,
+      downtimeMinutes: totals.downtimeMinutes,
+      totalObservedMinutes: summaryTotals,
+      totalObservedHours: summaryTotals / 60,
+      goodPercent: summaryTotals > 0 ? totals.goodMinutes / summaryTotals : 0,
+      setupPercent: summaryTotals > 0 ? totals.setupMinutes / summaryTotals : 0,
+      downtimePercent: summaryTotals > 0 ? totals.downtimeMinutes / summaryTotals : 0,
+      biggestLossReason: biggestLossReason ? biggestLossReason.label : "--",
+      biggestLossMinutes: biggestLossReason ? biggestLossReason.totalMinutes : 0,
+      sampleCount: intervals.length
+    },
+    pressRows: finalizeBuckets(pressBuckets, "press"),
+    dayRows: finalizeBuckets(dayBuckets, "day"),
+    statusRows: finalizeBuckets(statusBuckets, "status"),
+    operatorRows: finalizeBuckets(operatorBuckets, "operator"),
+    jobRows: finalizeBuckets(jobBuckets, "job")
   };
 }
 
@@ -837,6 +993,22 @@ export function AnalysisPage() {
   const currentIntervals = analysis.intervals || [];
   const comparisonIntervals = previousAnalysis.intervals || [];
   const canCompare = Boolean(compareEnabled && previousRange?.since && previousRange?.until && comparisonIntervals.length > 0);
+  const filteredIntervals = useMemo(
+    () =>
+      currentIntervals.filter((interval) =>
+        matchesFilters(interval, {
+          businessState: businessStateFilter,
+          eventType: eventTypeFilter,
+          statusDescription: statusDescriptionFilter,
+          operationCode: operationCodeFilter,
+          jobCode: jobCodeFilter
+        })
+      ),
+    [currentIntervals, businessStateFilter, eventTypeFilter, statusDescriptionFilter, operationCodeFilter, jobCodeFilter]
+  );
+  const currentAnalysis = useMemo(() => buildIntervalAnalysis(currentIntervals), [currentIntervals]);
+  const filteredAnalysis = useMemo(() => buildIntervalAnalysis(filteredIntervals), [filteredIntervals]);
+  const previousAnalysisSummary = useMemo(() => buildIntervalAnalysis(comparisonIntervals), [comparisonIntervals]);
 
   useEffect(() => {
     if (availableMachines.length === 0) {
@@ -868,8 +1040,8 @@ export function AnalysisPage() {
     [availableMachines, selectedMachineIds]
   );
 
-  const currentSummary = useMemo(() => summarizeIntervals(currentIntervals), [currentIntervals]);
-  const previousSummary = useMemo(() => summarizeIntervals(comparisonIntervals), [comparisonIntervals]);
+  const currentSummary = currentAnalysis.summary;
+  const previousSummary = previousAnalysisSummary.summary;
 
   const timelineIntervals = useMemo(
     () =>
@@ -879,21 +1051,7 @@ export function AnalysisPage() {
     [currentIntervals, primaryMachineId]
   );
 
-  const drilldownFilters = useMemo(
-    () => ({
-      businessState: businessStateFilter,
-      eventType: eventTypeFilter,
-      statusDescription: statusDescriptionFilter,
-      operationCode: operationCodeFilter,
-      jobCode: jobCodeFilter
-    }),
-    [businessStateFilter, eventTypeFilter, statusDescriptionFilter, operationCodeFilter, jobCodeFilter]
-  );
-
-  const drilldownIntervals = useMemo(
-    () => currentIntervals.filter((interval) => matchesFilters(interval, drilldownFilters)),
-    [currentIntervals, drilldownFilters]
-  );
+  const drilldownIntervals = filteredIntervals;
   const focusRecommendation = useMemo(
     () => buildFocusRecommendation(currentIntervals),
     [currentIntervals]
@@ -908,11 +1066,7 @@ export function AnalysisPage() {
   }, [drilldownIntervals, businessStateFilter]);
 
   const lossRows = useMemo(
-    () =>
-      aggregateIntervals(lossIntervals, (row) => row.statusDescription, (interval, key) => key).map((row) => ({
-        ...row,
-        label: row.key
-      })),
+    () => buildIntervalAnalysis(lossIntervals).statusRows.filter((row) => row.key !== "Run Production"),
     [lossIntervals]
   );
   const focusedLossTotalMinutes = useMemo(
@@ -920,35 +1074,19 @@ export function AnalysisPage() {
     [drilldownIntervals]
   );
 
-  const pressRows = useMemo(
-    () =>
-      aggregateIntervals(currentIntervals, (row) => row.machineId, (interval, key) => formatMachineDisplayName(key)).map((row) => ({
-        ...row,
-        label: formatMachineDisplayName(row.key)
-      })),
-    [currentIntervals]
-  );
-
-  const dayRows = useMemo(
-    () =>
-      aggregateIntervals(currentIntervals, (row) => row.dayKey, (interval, key) => key).map((row) => ({
-        ...row,
-        label: formatDay(row.key)
-      })),
-    [currentIntervals]
-  );
-
+  const pressRows = currentAnalysis.pressRows;
+  const dayRows = currentAnalysis.dayRows;
   const activeDrillRows = useMemo(() => {
     const source =
       activeTab === "status"
-        ? aggregateIntervals(drilldownIntervals, (row) => row.statusDescription, (interval, key) => key)
+        ? filteredAnalysis.statusRows
         : activeTab === "operator"
-          ? aggregateIntervals(drilldownIntervals, (row) => row.operationCode, (interval, key) => key)
+          ? filteredAnalysis.operatorRows
           : activeTab === "job"
-            ? aggregateIntervals(drilldownIntervals, (row) => row.jobCode, (interval, key) => key)
+            ? filteredAnalysis.jobRows
             : activeTab === "press"
-              ? aggregateIntervals(drilldownIntervals, (row) => row.machineId, (interval, key) => formatMachineDisplayName(key))
-              : aggregateIntervals(drilldownIntervals, (row) => row.dayKey, (interval, key) => key);
+              ? filteredAnalysis.pressRows
+              : filteredAnalysis.dayRows;
 
     return source.map((row) => ({
       ...row,
@@ -959,7 +1097,7 @@ export function AnalysisPage() {
             ? formatDay(row.key)
             : row.label || row.key
     }));
-  }, [activeTab, drilldownIntervals]);
+  }, [activeTab, filteredAnalysis]);
 
   const sortedComparisonRows = useMemo(() => {
     const rows = [...pressRows].sort((left, right) => left.goodPercent - right.goodPercent || right.totalMinutes - left.totalMinutes);
@@ -1058,6 +1196,7 @@ export function AnalysisPage() {
     setJobCodeFilter("all");
     setActiveTab("status");
     setPressToAdd("");
+    setCompareEnabled(false);
   }
 
   function handleRefresh() {
@@ -1091,6 +1230,32 @@ export function AnalysisPage() {
     setPressToAdd("");
   }
 
+  function removeMachine(machineId) {
+    setSelectedMachineIds((current) => {
+      const next = current.filter((value) => value !== machineId);
+
+      if (next.length === 0) {
+        return ["205"];
+      }
+
+      if (machineId === primaryMachineId) {
+        setPrimaryMachineId(next[0]);
+      }
+
+      return next;
+    });
+  }
+
+  function resetRangeToToday() {
+    const nextRange = getRangePreset("today");
+    setDraftSince(toDateTimeLocalValue(nextRange.since));
+    setDraftUntil(toDateTimeLocalValue(nextRange.until));
+    setAppliedRange({
+      since: nextRange.since.toISOString(),
+      until: nextRange.until.toISOString()
+    });
+  }
+
   function sortRows(key, currentSort, setSort) {
     setSort((previous) => {
       if (previous.key === key) {
@@ -1110,7 +1275,7 @@ export function AnalysisPage() {
 
   function selectTimelineInterval(interval) {
     setBusinessStateFilter(interval.businessState);
-    setStatusDescriptionFilter(interval.statusDescription);
+    setStatusDescriptionFilter("all");
     setEventTypeFilter(interval.eventType || "all");
     setOperationCodeFilter("all");
     setJobCodeFilter("all");
@@ -1161,6 +1326,7 @@ export function AnalysisPage() {
     : null;
 
   const isLoading = analysis.isLoading && currentIntervals.length === 0;
+  const rangeChipLabel = formatRangeChipLabel(appliedRange.since, appliedRange.until);
 
   return (
     <section className="status-analysis-page">
@@ -1227,23 +1393,40 @@ export function AnalysisPage() {
 
           <div className="analysis-toolbar-card">
             <div className="analysis-toolbar-card-head">
-              <p className="analysis-eyebrow">Selected presses</p>
+              <p className="analysis-eyebrow">Selected filters</p>
               <button type="button" className="analysis-text-button" onClick={handleClearFilters}>
                 Clear filters
               </button>
             </div>
-            <div className="analysis-selected-presses">
-              {selectedMachineIds.map((machineId) => (
-                <button
-                  key={machineId}
-                  type="button"
-                  className={`analysis-selected-chip ${primaryMachineId === machineId ? "analysis-selected-chip-primary" : ""}`}
-                  onClick={() => toggleMachine(machineId)}
-                  title="Click to remove"
-                >
-                  <strong>{formatMachineDisplayName(machineId)}</strong>
-                  <span>{machineId}</span>
+            <div className="analysis-selection-chips">
+              <div className="analysis-filter-chip analysis-filter-chip-range">
+                <button type="button" className="analysis-filter-chip-body" onClick={handleApplyRange} title="Use the current date range">
+                  <strong>{rangeChipLabel}</strong>
+                  <span>Date range</span>
                 </button>
+                <button type="button" className="analysis-filter-chip-close" onClick={resetRangeToToday} title="Reset to today">
+                  ×
+                </button>
+              </div>
+
+              {selectedMachineIds.map((machineId) => (
+                <div
+                  key={machineId}
+                  className={`analysis-filter-chip ${primaryMachineId === machineId ? "analysis-filter-chip-primary" : ""}`}
+                >
+                  <button type="button" className="analysis-filter-chip-body" onClick={() => focusPress(machineId)} title="Focus this press">
+                    <strong>{formatMachineDisplayName(machineId)}</strong>
+                    <span>{machineId}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="analysis-filter-chip-close"
+                    onClick={() => removeMachine(machineId)}
+                    title="Remove press"
+                  >
+                    ×
+                  </button>
+                </div>
               ))}
             </div>
             <div className="analysis-add-press-row">
@@ -1285,6 +1468,7 @@ export function AnalysisPage() {
                 </div>
               </label>
             </div>
+            <p className="analysis-panel-note">{selectedMachineCount} presses selected</p>
           </div>
         </div>
       </section>
@@ -1354,8 +1538,6 @@ export function AnalysisPage() {
           onClick={() => bestPress && focusPress(bestPress.key)}
         />
       </section>
-
-      <FocusNextCard recommendation={focusRecommendation} onDrillInto={drillIntoRecommendation} />
 
       {analysis.error ? (
         <section className="panel status-analysis-panel analysis-error-banner">
@@ -1611,6 +1793,8 @@ export function AnalysisPage() {
           />
         </article>
       </section>
+
+      <FocusNextCard recommendation={focusRecommendation} onDrillInto={drillIntoRecommendation} />
 
       <DebugPanel currentDebug={analysis.debug} previousDebug={previousAnalysis.debug} />
     </section>

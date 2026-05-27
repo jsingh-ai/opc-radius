@@ -144,7 +144,7 @@
 
 .analysis-quick-ranges,
 .analysis-state-chips,
-.analysis-selected-presses {
+.analysis-selection-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -170,6 +170,59 @@
 .analysis-selected-chip {
   border-radius: 999px;
   padding: 10px 14px;
+}
+
+.analysis-filter-chip {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  background: var(--soft-bg);
+}
+
+.analysis-filter-chip-primary {
+  border-color: rgba(113, 183, 255, 0.38);
+}
+
+.analysis-filter-chip-range {
+  border-color: rgba(139, 151, 165, 0.34);
+}
+
+.analysis-filter-chip-body {
+  display: grid;
+  gap: 2px;
+  align-items: center;
+  min-width: 132px;
+  padding: 10px 14px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.analysis-filter-chip-body strong {
+  font-size: 0.94rem;
+}
+
+.analysis-filter-chip-body span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.analysis-filter-chip-close {
+  width: 34px;
+  border: 0;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  border-left: 1px solid var(--panel-border);
+}
+
+.analysis-filter-chip-close:hover,
+.analysis-filter-chip-body:hover {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .analysis-chip-primary,
