@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { usePageHeader } from "../context/PageHeaderContext";
 import { useMachineStatusAnalysis } from "../hooks/useMachineStatusAnalysis";
-import { fetchMachineStatuses } from "../services/machineStatusService";
 import {
   formatDurationMinutes,
   formatMachineDisplayName,
@@ -137,51 +136,7 @@ export function AnalysisPage() {
     until: fromDateTimeLocalValue(toDateTimeLocalValue(new Date())),
     machineIds: []
   });
-  const [availableMachines, setAvailableMachines] = useState([]);
-  const [machineListError, setMachineListError] = useState("");
-  const [machineListLoading, setMachineListLoading] = useState(true);
   const { setHeaderState, defaultHeaderState } = usePageHeader();
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadMachines() {
-      try {
-        const response = await fetchMachineStatuses();
-
-        if (!isMounted) {
-          return;
-        }
-
-        setAvailableMachines(response.machines);
-
-        if (response.machines.length > 0) {
-          const machineIds = response.machines.map((machine) => machine.machineId);
-          setDraftMachineIds(machineIds);
-          setAppliedFilters((current) => ({
-            ...current,
-            machineIds
-          }));
-        }
-      } catch (error) {
-        if (isMounted) {
-          setMachineListError(
-            error instanceof Error ? error.message : "Failed to load available presses."
-          );
-        }
-      } finally {
-        if (isMounted) {
-          setMachineListLoading(false);
-        }
-      }
-    }
-
-    loadMachines();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   useEffect(() => {
     setHeaderState({
@@ -206,6 +161,18 @@ export function AnalysisPage() {
   );
 
   const dashboard = useMachineStatusAnalysis(analysisParams);
+  const availableMachines = dashboard.availableMachines;
+
+  useEffect(() => {
+    if (availableMachines.length > 0 && draftMachineIds.length === 0) {
+      const machineIds = availableMachines;
+      setDraftMachineIds(machineIds);
+      setAppliedFilters((current) => ({
+        ...current,
+        machineIds
+      }));
+    }
+  }, [availableMachines, draftMachineIds.length]);
 
   const latestRangeLabel = dashboard.since && dashboard.until
     ? `${formatTimestamp(dashboard.since)} - ${formatTimestamp(dashboard.until)}`
@@ -264,7 +231,7 @@ export function AnalysisPage() {
 
         <div className="analysis-controls">
           <div className="analysis-select-block">
-            <span className="label">Time range</span>
+            <span className="label">Filters</span>
             <div className="time-range-grid">
               <label className="field-group">
                 <span>From</span>
@@ -285,13 +252,51 @@ export function AnalysisPage() {
                 />
               </label>
             </div>
-            <div className="filter-actions">
-              <button type="button" className="window-chip" onClick={handleResetWindow}>
-                Last 24h
-              </button>
-              <button type="button" className="window-chip" onClick={handleApplyFilters}>
-                Apply time filter
-              </button>
+            <div className="analysis-control-group">
+              <div className="analysis-panel-header">
+                <div>
+                  <p className="eyebrow">Compare presses</p>
+                  <h3>Select machines to include</h3>
+                </div>
+                <div className="analysis-panel-note">
+                  {selectedMachineCount} selected
+                </div>
+              </div>
+
+              <div className="filter-actions">
+                <button type="button" className="window-chip" onClick={handleResetWindow}>
+                  Last 24h
+                </button>
+                <button type="button" className="window-chip" onClick={handleSelectAll}>
+                  Select all
+                </button>
+                <button type="button" className="window-chip" onClick={handleClearAll}>
+                  Clear
+                </button>
+                <button type="button" className="window-chip window-chip-active" onClick={handleApplyFilters}>
+                  Apply filters
+                </button>
+              </div>
+
+              <div className="machine-picker">
+                {availableMachines.map((machineId) => {
+                  const isSelected = draftMachineIds.includes(machineId);
+                  return (
+                    <button
+                      key={machineId}
+                      type="button"
+                      className={isSelected ? "machine-chip machine-chip-active" : "machine-chip"}
+                      onClick={() => handleToggleMachine(machineId)}
+                    >
+                      <strong>{formatMachineDisplayName(machineId)}</strong>
+                      <span>{machineId}</span>
+                    </button>
+                  );
+                })}
+                {!dashboard.isLoading && availableMachines.length === 0 ? (
+                  <p className="analysis-empty">No presses were returned from machine_status_history.</p>
+                ) : null}
+              </div>
             </div>
           </div>
 
@@ -300,61 +305,6 @@ export function AnalysisPage() {
             <p className="value-emphasis">{dashboard.lastLoadedLabel}</p>
             <p className="analysis-meta-copy">{latestRangeLabel}</p>
           </div>
-        </div>
-      </section>
-
-      <section className="panel analysis-panel">
-        <div className="analysis-panel-header">
-          <div>
-            <p className="eyebrow">Compare presses</p>
-            <h3>Select machines to include</h3>
-          </div>
-          <div className="analysis-panel-note">
-            {selectedMachineCount} selected
-          </div>
-        </div>
-
-        {machineListLoading ? (
-          <p className="analysis-empty">Loading presses...</p>
-        ) : null}
-
-        {machineListError ? (
-          <section className="panel state-panel error-panel">
-            <p className="eyebrow">Press List Error</p>
-            <p>{machineListError}</p>
-          </section>
-        ) : null}
-
-        <div className="filter-actions">
-          <button type="button" className="window-chip" onClick={handleSelectAll}>
-            Select all
-          </button>
-          <button type="button" className="window-chip" onClick={handleClearAll}>
-            Clear
-          </button>
-          <button type="button" className="window-chip window-chip-active" onClick={handleApplyFilters}>
-            Apply presses
-          </button>
-        </div>
-
-        <div className="machine-picker">
-          {availableMachines.map((machine) => {
-            const isSelected = draftMachineIds.includes(machine.machineId);
-            return (
-              <button
-                key={machine.machineId}
-                type="button"
-                className={isSelected ? "machine-chip machine-chip-active" : "machine-chip"}
-                onClick={() => handleToggleMachine(machine.machineId)}
-              >
-                <strong>{machine.displayName || formatMachineDisplayName(machine.machineId)}</strong>
-                <span>{machine.machineId}</span>
-              </button>
-            );
-          })}
-          {!machineListLoading && availableMachines.length === 0 ? (
-            <p className="analysis-empty">No presses were returned by the current machine list.</p>
-          ) : null}
         </div>
       </section>
 

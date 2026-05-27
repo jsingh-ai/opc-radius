@@ -17,6 +17,7 @@ export function useMachineStatusAnalysis(params) {
       statusCount: 0,
       latestIntervalAt: null
     },
+    availableMachines: [],
     statusTotals: [],
     machineBreakdown: [],
     recentIntervals: []

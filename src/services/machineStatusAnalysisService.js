@@ -38,6 +38,7 @@ export async function fetchMachineStatusAnalysis(params = {}) {
       statusCount: 0,
       latestIntervalAt: null
     },
+    availableMachines: Array.isArray(payload?.availableMachines) ? payload.availableMachines : [],
     statusTotals: Array.isArray(payload?.statusTotals) ? payload.statusTotals : [],
     machineBreakdown: Array.isArray(payload?.machineBreakdown) ? payload.machineBreakdown : [],
     recentIntervals: Array.isArray(payload?.recentIntervals) ? payload.recentIntervals : []
